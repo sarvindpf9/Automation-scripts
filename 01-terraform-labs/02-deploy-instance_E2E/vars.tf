@@ -19,7 +19,7 @@ variable "custom_name" {
 }
 
 variable "image_name" {
-  default = "cirros-0.6.3"
+  default = "cirros-0.6.3new"
 }
 
 variable "flavor_name" {
@@ -56,5 +56,3 @@ variable "cidr" {
   type    = string
   default = "192.168.200.0/24"
 }
-
-
