@@ -1,0 +1,71 @@
+---
+- name: Delete OpenStack resources
+  hosts: localhost
+  gather_facts: false
+  collections:
+    - openstack.cloud
+
+  vars:
+    image_name: cirros
+    volume_name: demo-volume
+    instance_name: demo-vm
+    network_name: "{{ network }}"
+    subnet_name: "{{ subnet }}"
+
+  tasks:
+    - name: Delete server instance
+      openstack.cloud.server:
+        cloud: sa-demo_public
+        state: absent
+        name: "{{ instance_name }}"
+        wait: yes
+        timeout: 300
+      register: instance_result
+      tags: remove_instance
+
+    - name: Set instance removed flag
+      set_fact:
+        instance_removed: true
+      when: instance_result.changed
+
+    - name: Delete boot volume
+      openstack.cloud.volume:
+        cloud: sa-demo_public
+        display_name: "{{ volume_name }}"
+        state: absent
+        wait: yes
+        timeout: 180
+      when: instance_removed
+      tags: delete_volume
+
+    - name: Delete subnet
+      openstack.cloud.subnet:
+        cloud: sa-demo_public
+        name: "{{ subnet_name }}"
+        state: absent
+        wait: yes
+        timeout: 120
+      when: instance_removed
+      tags: remove_subnet
+
+    - name: Delete network
+      openstack.cloud.network:
+        cloud: sa-demo_public
+        state: absent
+        name: "{{ network_name }}"
+        external: false
+        wait: yes
+        timeout: 120
+      when: instance_removed
+      tags: remove_network
+
+    - name: Delete image from glance
+      openstack.cloud.image:
+        cloud: sa-demo_admin
+        name: "{{ image_name }}"
+        state: absent
+        interface: admin
+        wait: yes
+        timeout: 180
+      register: image_result
+      tags: remove_image

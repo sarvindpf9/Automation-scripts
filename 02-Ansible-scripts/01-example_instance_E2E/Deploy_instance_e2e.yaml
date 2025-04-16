@@ -1,0 +1,76 @@
+---
+- name: Deploy OpenStack resources
+  hosts: localhost
+  gather_facts: false
+  collections:
+    - openstack.cloud
+
+  tasks:
+    - name: Upload image to glance
+      openstack.cloud.image:
+        cloud: sa-demo_admin
+        name: cirros
+        filename: ./cirros-0.6.3-x86_64-disk.img
+        container_format: bare
+        disk_format: qcow2
+        state: "{{ state }}"
+        interface: admin
+      register: image_result
+
+    - name: Set flag if image uploaded
+      set_fact:
+        image_present: true
+      when: image_result.changed or image_result.id is defined
+
+    - name: Create network
+      openstack.cloud.network:
+        cloud: sa-demo_public
+        state: "{{ state }}"
+        name: "{{ network }}"
+        external: false
+      register: network_result
+
+    - name: Set flag if network created
+      set_fact:
+        network_remove: true
+      when: network_result.changed or network_result.id is defined
+
+    - name: Create subnet
+      openstack.cloud.subnet:
+        cloud: sa-demo_public
+        network_name: "{{ network }}"
+        cidr: 192.168.100.0/24
+        ip_version: 4
+        name: "{{ subnet }}"
+        state: "{{ state }}"
+      when: network_remove
+
+    - name: Create boot volume
+      openstack.cloud.volume:
+        cloud: sa-demo_public
+        display_name: demo-volume
+        size: 3
+        volume_type: nfs-cinder
+        state: "{{ state }}"
+
+    - name: Create server instance
+      openstack.cloud.server:
+        cloud: sa-demo_public
+        state: "{{ state }}"
+        name: demo-vm
+        image: cirros
+        flavor: m1.small
+        network: "{{ network }}"
+        boot_from_volume: yes
+        volume_size: 3
+        terminate_volume: true
+        auto_ip: false
+        timeout: 300
+        wait: yes    
+      register: instance_result
+      when: image_present
+
+    - name: Check instance status
+      fail:
+        msg: "Instance failed to reach ACTIVE state. Current status: {{ instance_result.server.status }}"
+      when: instance_result.server.status != 'ACTIVE'
