@@ -21,13 +21,15 @@ tofu init
 ```
 - Configure the `testdeploy.tfvars` file to have the necessary openstack auth configuration along with image and  glance config:
 ```bash
-openstack_user_name = <usernmame>
-openstack_tenant_name = "service"
-openstack_password = <password>
-openstack_auth_url = "https://<URL>/keystone/v3"
-image_name = "<actual name of the image present in the glance>"
-flavor_name = "<required-flavor_already_present>"
-glance_image_name = "<name of the image that is to be uploaded to glance>"
+openstack_user_name = "<User-name>"
+openstack_tenant_name = "<tenant_name>"
+openstack_password = "<password>"
+openstack_auth_url = "https://portal_url/keystone/v3"
+openstack_region = "<region_name>"
+image_name = "<name_of_the_image_available>"
+flavor_name = "<flavor_name_available>"
+glance_image_name = "<name_of_the_image_to_be_uploaded>"
+
 ```
 - Copy the required glance image inside this directory.
 - Run plan and apply command with tofu. To include volume and image deployment:

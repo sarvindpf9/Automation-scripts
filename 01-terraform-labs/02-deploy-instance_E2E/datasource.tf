@@ -8,5 +8,5 @@ data "openstack_compute_flavor_v2" "flavor_name" {
 
 data "openstack_images_image_v2" "existing_image" {
   count = var.deploy_image ? 0 : 1
-  name  = var.glance_image_name
+  name  = var.image_name
 }

@@ -10,14 +10,13 @@ terraform {
 
 # public interface
 provider "openstack" {
-  alias         = "default_interface"
   insecure      = true
   endpoint_type = "public"
   user_name     = "${var.openstack_user_name}"
   tenant_name   = "${var.openstack_tenant_name}"
   password      = "${var.openstack_password}"
   auth_url      = "${var.openstack_auth_url}"
-  #region        = "${var.openstack_region}"
+  region        = "${var.openstack_region}"
   domain_name   = "Default"
 }
 
@@ -30,6 +29,6 @@ provider "openstack" {
   tenant_name   = "${var.openstack_tenant_name}"
   password      = "${var.openstack_password}"
   auth_url      = "${var.openstack_auth_url}"
-  #region        = "${var.openstack_region}"
+  region        = "${var.openstack_region}"
   domain_name   = "Default"
 }

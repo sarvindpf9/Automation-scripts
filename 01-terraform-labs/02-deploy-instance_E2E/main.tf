@@ -14,7 +14,7 @@ resource "openstack_networking_subnet_v2" "subnet" {
 resource "openstack_images_image_v2" "image" {
   count            = var.deploy_image ? 1 : 0
   provider         = openstack.admin_interface
-  name             = "${var.custom_name}-image"
+  name             = "${var.glance_image_name}"
   local_file_path  = "${path.module}/${var.glance_image_name}"
   container_format = "bare"
   disk_format      = "qcow2"
