@@ -1,0 +1,90 @@
+
+#cloud-config  
+hostname: haas-bm-03
+create_hostname_file: true
+prefer_fqdn_over_hostname: false
+write_files:  
+  - path: /etc/netplan/50-cloud-init.yaml  
+    permissions: "600"  
+    content: |  
+      network:  
+        version: 2  
+        ethernets:  
+          enp24s0f0:   
+            dhcp4: no
+          enp24s0f1:  
+            dhcp4: no
+          enp59s0f0:
+            dhcp4: no
+          enp59s0f1:
+            dhcp4: no       
+        bonds:
+          bond0:
+            interfaces:
+              - enp24s0f0
+              - enp24s0f1
+            mtu: 9000
+            parameters:
+              mode: 802.3ad
+              down-delay: 0
+              lacp-rate: fast
+              mii-monitor-interval: 100
+              transmit-hash-policy: layer3+4
+              up-delay: 0
+          bond1:
+            interfaces:
+              - enp59s0f0
+              - enp59s0f1
+            mtu: 9000
+            parameters:
+              mode: 802.3ad
+              down-delay: 0
+              lacp-rate: fast
+              mii-monitor-interval: 100
+              transmit-hash-policy: layer3+4
+              up-delay: 0
+        vlans:
+          vlan.301:  
+            id: 301  
+            link: bond0 
+            addresses:  
+              - 10.10.0.4/18  
+            routes:  
+              - to: default  
+                via: 10.10.0.1  
+            nameservers:  
+              addresses:  
+                - 8.8.8.8 
+                - 1.1.1.1  
+          vlan.305:
+            id: 305
+            link: bond1
+            dhcp4: true
+            dhcp6: false
+            dhcp4-overrides:
+              use-routes: false
+              use-dns: no
+          vlan.306:
+            id: 306
+            link: bond1
+            dhcp4: false
+            dhcp6: false
+            dhcp4-overrides:
+              use-routes: false
+              use-dns: no
+            addresses:
+             - 10.10.127.6/18
+chpasswd:
+  expire: false
+  users:
+  - {name: ubuntu, password: password, type: text}
+ssh_pwauth: true
+users:  
+- name: ubuntu  
+  sudo: ['ALL=(ALL) NOPASSWD:ALL']  
+  groups: [sudo, admin]  
+  shell: /bin/bash  
+runcmd:
+- [hostnamectl, set-hostname, "haas-bm-03"]
+- [netplan, apply]
+- [systemctl, restart, ssh]

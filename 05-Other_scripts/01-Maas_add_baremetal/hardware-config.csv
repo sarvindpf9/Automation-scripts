@@ -1,0 +1,3 @@
+hostname,architecture,mac_addresses,power_type,power_user,power_pass,power_driver,power_address,cipher_suite_id,power_boot_type,privilege_level,k_g,cloud_init_path
+haas-bm-03,amd64,3c:ec:ef:5f:5e:00,ipmi,ADMIN,Platform9,LAN_2_0,192.168.100.4,3,efi,ADMIN,"",cloud-inits/haas-bm-03_cloud-init.yaml
+haas-bm-04,amd64,3c:ec:ef:1c:df:3e,ipmi,ADMIN,Platform9,LAN_2_0,192.168.100.5,3,efi,ADMIN,"",cloud-inits/haas-bm-04_cloud-init.yaml
