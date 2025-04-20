@@ -20,6 +20,7 @@ def setup_logger():
     logger = logging.getLogger("maas_logger")
     logger.setLevel(logging.INFO)
     logger.propagate = False  
+    #file_handler = logging.FileHandler(log_file)
     file_handler = RotatingFileHandler(
         log_file, maxBytes=1 * 1024 * 1024, backupCount=5
     )
@@ -125,7 +126,6 @@ def create_machine(maas_user, row):
         logger.exception(f"[{hostname or 'unknown'}] Unexpected error during machine creation: {str(e)}")
         return hostname or "unknown", None, f"Unhandled exception: {str(e)}"
 
-
 def apply_cloud_init(maas_user, system_id, cloud_init_file, hostname):
     try:
         if not os.path.isfile(cloud_init_file):
@@ -148,7 +148,6 @@ def apply_cloud_init(maas_user, system_id, cloud_init_file, hostname):
         )
         if result.returncode == 0:
             logger.info(f"[{hostname}] Successfully initiated deployment with cloud-init.")
-            print(f"[{hostname}] Deployment initiated with cloud-init.")
         else:
             logger.error(f"[{hostname}] MAAS CLI error: {result.stderr.strip()}")
             print(f"[{hostname}] MAAS CLI error: {result.stderr.strip()}")
@@ -171,12 +170,10 @@ def configure_and_deploy(maas_user, hostname, system_id, cloud_init_file):
     if not system_id:
         logger.warning(f"[{hostname}] Skipping due to missing system_id.")
         return
-
     if wait_for_status(maas_user, system_id, "Ready", hostname):
+        time.sleep(10)
         if cloud_init_file:
             apply_cloud_init(maas_user, system_id, cloud_init_file, hostname)
-        deploy_machine(maas_user, hostname, system_id)
-
         if wait_for_status(maas_user, system_id, "Deployed", hostname):
             logger.info(f"[{hostname}] Successfully deployed.")
         else:
@@ -197,6 +194,95 @@ def find_cloud_init_file(hostname, cloud_init_dir=cloud_init_dir):
                 return matched_file
     return None
 
+# Set MaaS network interface to Auto if not already set
+def update_interface_to_auto(maas_user, hostname, csv_path):
+    try:
+        if not os.path.isfile(csv_path):
+            print(f"CSV file not found at: {csv_path}")
+            return False
+
+        mac_address = None
+        with open(csv_path, 'r') as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                if row.get("hostname") == hostname:
+                    mac_address = row.get("mac_addresses")
+                    break
+        if not mac_address:
+            print(f"No matching row found for hostname '{hostname}' in CSV.")
+            return False
+
+        mac_address = mac_address.strip().split(",")[0]
+        print(f"MAC address for hostname '{hostname}': {mac_address}")
+        # 2. Get system_id from MAAS using hostname
+        cmd_get_system_id = [
+            "maas", maas_user, "machines", "read"
+        ]
+        result = subprocess.run(cmd_get_system_id, capture_output=True, text=True, check=True)
+        machines = json.loads(result.stdout)
+        matched_machine = next((m for m in machines if m["hostname"] == hostname), None)
+
+        if not matched_machine:
+            print(f"System ID for hostname '{hostname}' not found in MAAS.")
+            return False
+
+        system_id = matched_machine["system_id"]
+        print(f"System ID for hostname '{hostname}': {system_id}")
+
+        # 3. Get interface details
+        cmd_interfaces = ["maas", maas_user, "interfaces", "read", system_id]
+        result = subprocess.run(cmd_interfaces, capture_output=True, text=True, check=True)
+        interfaces = json.loads(result.stdout)
+
+        interface = next((iface for iface in interfaces if iface["mac_address"].lower() == mac_address.lower()), None)
+        if not interface:
+            print(f"Interface with MAC {mac_address} not found in MAAS for system {system_id}.")
+            return False
+
+        interface_id = interface["id"]
+        interface_name = interface["name"]
+        if not interface["links"]:
+            print(f"No subnet links found on interface {interface_name}.")
+            return False
+        subnet_link = interface["links"][0]
+        subnet_link_id = subnet_link["id"]
+        current_mode = subnet_link["mode"]
+        subnet_cidr = subnet_link["subnet"]["cidr"]
+        print(f"[{hostname}] Interface '{interface_name}'  has {interface_id} id mapped to subnet {subnet_link_id} and currently in mode: {current_mode}")
+        if current_mode != "auto":
+            print(f"[{hostname}] Unlinking interface {interface_name} from subnet...")
+            unlink_cmd = [
+                "maas", maas_user, "interface", "unlink-subnet",
+                system_id, str(interface_id),
+                f"id={subnet_link_id}"
+            ]
+            subprocess.run(unlink_cmd, check=True)
+
+            print(f"[{hostname}] Re-linking interface {interface_name} to subnet {subnet_cidr} with mode=auto...")
+            link_cmd = [
+                "maas", maas_user, "interface", "link-subnet",
+                system_id, str(interface_id),
+                "mode=auto", f"subnet={subnet_cidr}"
+            ]
+            subprocess.run(link_cmd, check=True)
+        recheck_result = subprocess.run(cmd_interfaces, capture_output=True, text=True, check=True)
+        recheck_interfaces = json.loads(recheck_result.stdout)
+        recheck_interface = next((iface for iface in recheck_interfaces if iface["mac_address"].lower() == mac_address.lower()), None)
+        new_mode = recheck_interface["links"][0]["mode"]
+        if new_mode == "auto":
+            print(f"[{hostname}] Successfully updated interface {interface_name} to mode 'auto'")
+            return True
+        else:
+            print(f"[{hostname}] Mode update failed. Current mode: {new_mode}")
+            return False
+    except subprocess.CalledProcessError as e:
+        print(f"[{hostname}] Command failed: {e.stderr.strip()}")
+        return False
+    except Exception as ex:
+        print(f"[{hostname}] Unexpected error: {str(ex)}")
+        return False
+
+# Function to add machines from a CSV file 
 def add_machines_from_csv(maas_user, csv_file, cloud_init_dir=cloud_init_dir):
     if not os.path.isfile(csv_file):
         logger.error(f"CSV file not found: {csv_file}")
@@ -219,6 +305,7 @@ def add_machines_from_csv(maas_user, csv_file, cloud_init_dir=cloud_init_dir):
     if not rows:
         logger.warning("No machine entries found in CSV.")
         return
+    # Create machines in parallel
     results = []
     with ThreadPoolExecutor(max_workers=5) as executor:
         future_to_row = {executor.submit(create_machine, maas_user, row): row for row in rows}
@@ -243,8 +330,22 @@ def add_machines_from_csv(maas_user, csv_file, cloud_init_dir=cloud_init_dir):
         else:
             logger.info(f"[{hostname}] Cloud-init file found: {cloud_init_file}")
         results_with_cloud_init.append((hostname, system_id, cloud_init_file))
+
     if not results_with_cloud_init:
         logger.error("No machines available with valid cloud-init files. Exiting.")
         return
+    def process_machine(args):
+        hostname, system_id, cloud_init_file = args
+        # 1. Wait before deploying
+        logger.info(f"[{hostname}] Waiting for operations to converge before deployment steps...")
+        time.sleep(15)
+        # 2. Update interface mode to auto
+        if wait_for_status(maas_user, system_id, "Ready", hostname):
+            logger.info(f"[{hostname}] Verifying and Updating interface to auto mode...")
+            if not update_interface_to_auto(maas_user, hostname, csv_path=csv_file):
+                logger.warning(f"[{hostname}] Interface update to auto mode failed or skipped.")
+            # 3. Deploy machine with cloud-init
+            logger.info(f"[{hostname}] Starting deployment...")
+            configure_and_deploy(maas_user, hostname, system_id, cloud_init_file)
     with ThreadPoolExecutor(max_workers=5) as executor:
-        executor.map(lambda args: configure_and_deploy(maas_user, *args), results_with_cloud_init)
+        executor.map(process_machine, results_with_cloud_init)
