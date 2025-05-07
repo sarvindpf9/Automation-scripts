@@ -1,0 +1,25 @@
+prod:
+  url: 'https://<infra-du-region>.app.staging-pcd.platform9.com'
+  cloud: <cloudname>
+  hostconfigs:
+    BM_HC_novirt:
+      name: BM_HC_novirt
+      clusterName: titan-cluster
+      networkLabels:
+        ext_net: vlan.301
+        int_net: vlan.305
+      vmConsoleInterface: vlan.301
+      hostLivenessInterface: vlan.301
+      tunnelingInterface: vlan.301
+      imagelibInterface: vlan.301
+      mgmtInterface: vlan.301
+    VMhostNet:
+      name: VMhostNet
+      clusterName: titan-cluster
+      networkLabels:
+        physnet1: ens3
+      vmConsoleInterface: ens3
+      hostLivenessInterface: ens3
+      tunnelingInterface: ens3
+      imagelibInterface: ens3
+      mgmtInterface: ens3

@@ -1,0 +1,2 @@
+hostname,architecture,mac_addresses,power_type,power_user,power_pass,power_driver,power_address,cipher_suite_id,power_boot_type,privilege_level,k_g,ip
+pf9-test02,amd64/generic,a0:36:9f:3c:91:b9,ipmi,admin,admin,LAN_2_0,172.25.1.31,3,auto,ADMIN,,192.168.125.166

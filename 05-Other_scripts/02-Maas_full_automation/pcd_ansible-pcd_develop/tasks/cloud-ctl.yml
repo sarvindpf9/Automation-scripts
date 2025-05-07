@@ -1,0 +1,7 @@
+- name: Download latest cloud-ctl
+  become: true
+  get_url:
+    url: https://cloud-ctl.s3.us-west-1.amazonaws.com/cloud-ctl
+    dest: /usr/bin/cloud-ctl
+    mode: 755
+    force: true

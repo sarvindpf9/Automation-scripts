@@ -1,0 +1,88 @@
+- hosts: localhost
+  connection: local
+  become: no
+  gather_facts: false
+  tasks:
+    - name: Read configuration for requested cloud
+      openstack.cloud.config:
+        clouds:
+        {%- raw %}
+          - "{{ cloud_name }}"
+        {%- endraw %}
+      register: cloud_config
+      no_log: true
+
+    {%- raw %}
+    - import_tasks: ./roles/common/tasks/token.yml
+    {%- endraw %}
+
+    - name: Find index of cloud name in cloud_config
+      set_fact:
+        {%- raw %}
+        cloud_index: "{{ cloud_config['clouds'] | selectattr('name', 'equalto', cloud_name) | list | first }}"
+        {%- endraw %}
+      no_log: true
+
+    - name: Set the cloud variable
+      set_fact:
+        {%- raw %}
+        cloud_auth_url: "{{ cloud_config['clouds'][cloud_index | int]['config']['auth']['auth_url'] }}"
+        cloud_username: "{{ cloud_config['clouds'][cloud_index | int]['config']['auth']['username'] }}"
+        cloud_password: "{{ cloud_config['clouds'][cloud_index | int]['config']['auth']['password'] }}"
+        cloud_project_name: "{{ cloud_config['clouds'][cloud_index | int]['config']['auth']['project_name'] }}"
+        cloud_region_name: "{{ cloud_config['clouds'][cloud_index | int]['config']['region_name'] }}"
+        pcd_region_portal: "{{ pcd.url }}"
+        {%- endraw %}
+      no_log: true
+
+{%- raw %}
+- hosts: "{{ environment }}"
+{%- endraw %}
+  connection: ssh
+  gather_facts: false
+  vars:
+    excluded_roles: ""
+  tasks:
+    - name: process excluded roles as input
+      set_fact:
+        {%- raw %}
+        excluded_roles: "{{ excluded_roles.split(',') if excluded_roles else [] }}"
+        {%- endraw %}
+
+    - name: Get roles for servers
+      set_fact:
+        {%- raw %}
+        rolenames: "{{ hostvars[inventory_hostname]['roles'] }}"
+        {%- endraw %}
+
+    - name: export network hostconfigs names
+      {%- raw %}
+      set_fact:
+         hostconfig: "{{ hostvars[inventory_hostname]['hostconfigs'] }}"
+      {%- endraw %}
+
+    - set_fact:
+      {%- raw %}
+        keystone_token: "{{ hostvars['global_vars'].keystone_token }}"
+      {%- endraw %}
+      no_log: true
+
+    - set_fact:
+      {%- raw %}
+        cloud_name: "{{ hostvars['localhost']['cloud_region_name'] }}"
+      {%- endraw %}
+
+    -  set_fact:
+       {%- raw %}
+         filtered_roles: "{{ excluded_roles.split(',') if excluded_roles else rolenames }}"
+       {%- endraw %}
+
+    - name: Include roles for the nodes
+      include_role:
+      {%- raw %}
+        name: "{{ item }}"
+      loop: "{{ filtered_roles }}"
+      loop_control:
+        loop_var: item
+      {%- endraw %}
+      when: item is string

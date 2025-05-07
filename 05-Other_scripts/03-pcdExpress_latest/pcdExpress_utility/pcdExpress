@@ -1,0 +1,347 @@
+#!/usr/bin/env python3
+
+import sys
+#import logging
+from datetime import datetime
+#from logging.handlers import RotatingFileHandler
+import yaml
+#from yaml.loader import SafeLoader
+#from jinja2 import Environment, FileSystemLoader, Template
+import os
+#import json
+import argparse
+import subprocess
+from modules import pcdInstallHelper
+
+###############################################################################
+#                                 Global vars                                 #
+###############################################################################
+current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+logfileName = f"pcd-install-operation-{current_time}.log"
+current_dir = os.path.dirname(os.path.abspath(__file__))
+template_dir = os.path.dirname(os.path.abspath(__file__))
+
+# create logging directory if not present
+logdir = f"{current_dir}/logs/pcd_installer_logs"
+if not os.path.exists(logdir):
+    os.makedirs(logdir)
+#logfile = os.path.join(f"{current_dir}/logs/pcd_installer_logs/", logfileName)
+logfile = os.path.join(f"{logdir}", logfileName)
+
+###############################################################################
+#                                  Create logger                              #
+###############################################################################
+#logger = logging.getLogger("pcd_installer")
+#logger.setLevel(logging.DEBUG)
+#ch = logging.StreamHandler(sys.stdout)
+#ch.setLevel(logging.DEBUG)
+#formatter = logging.Formatter(
+#    '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+#ch.setFormatter(formatter)
+#logger.addHandler(ch)
+#fh = RotatingFileHandler(logfile, maxBytes=5*1024*1024, backupCount=5)
+#fh.setFormatter(formatter)
+#logger.addHandler(fh)
+
+
+###############################################################################
+#                           Argument parsing                                  #
+###############################################################################
+parser = argparse.ArgumentParser(description="Utility to configure PCD and enrol nodes",formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+#parser.add_argument("-clustername", "--clustername", action='store', help="takes clustername as input (REQUIRED)", required=False)
+parser.add_argument("-portal", "--portal", action='store', help="takes region name as input (REQUIRED)", required=False)
+parser.add_argument("-region", "--region", action='store', help="takes site name as input to form DU name. DU=<portal>-<region> (REQUIRED)", required=False)
+parser.add_argument("-env", "--env", action='store', help="takes a string value to segregate hosts in the side. Value: STRING", required=False)
+parser.add_argument("-render-userconfig", "--render-userconfig", action='store', help="takes filepath of user config for host onboarding. Value: FILEPATH", required=False)
+parser.add_argument("-show-dir", "--show-dir", action='store', help="to list required dir view of regions sub-dirs. Values: yes|no", required=False)
+parser.add_argument("-setup-environment", "--setup-environment", action='store', help="Setup environment for ansible play exec and management (REQUIRED). Values: yes|no", required=False)
+parser.add_argument("-create-templates-json", "--create-templates-json", action='store', help="save all userconfig in a json file locally inside jsonsave/directory (OPTIONAL)", required=False)
+parser.add_argument("-create-blueprints", "--create-blueprints", action='store', help="start blueprint template generation. values: yes|no", required=False)
+parser.add_argument("-apply-blueprints", "--apply-blueprints", action='store', help="Deploy the blueprint templates. Values: yes|no", required=False)
+parser.add_argument("-create-hostconfigs", "--create-hostconfigs", action='store', help="start hostconfigs template generation Values: yes|no", required=False, default="")
+parser.add_argument("-apply-hostconfigs", "--apply-hostconfigs", action='store', help="deploy the hostconfigs template. Values: yes|no", required=False)
+parser.add_argument("-create-networks-configs", "--create-networks-configs", action='store', help="Create network templates from the user configs Values: yes|no", required=False)
+parser.add_argument("-apply-networks-configs", "--apply-networks-configs", action='store', help="Create network templates from the user configs Values: yes|no", required=False)
+parser.add_argument("-apply-playbooks-all", "--apply-playbooks-all", action='store', help="Deploy all playbooks with DU name prefix from the playbooks directory. Values: yes|no", required=False)
+parser.add_argument("-create-hostagents-configs", "--create-hostagents-configs", action='store', help="Create/render node onboarding playbooks with user input. Values: yes|no", required=False)
+parser.add_argument("-apply-hosts-onboard", "--apply-hosts-onboard", action='store', help="Create/render node onboarding playbooks with user input. Values: yes|no", required=False)
+parser.add_argument("-update-role-config", "--update-role-config", action='store', help="re-render the templates with updated role details. Values: yes|no", required=False)
+parser.add_argument("-ostype ", "--ostype", action='store', help="take input to get os flavor of local environment to setup the ecosystem . Values: mac|ubuntu", required=False)
+parser.add_argument("-env-file ", "--env-file", action='store', help="provide file containing portal,region and env as yaml . Values: YAML file", required=False)
+parser.add_argument("-url ", "--url", action='store', help="Set portal URL for blueprint/hostconfigs/network resources", required=False)
+parser.add_argument("-deauth-role ", "--deauth-role", action='store', help="De-authorize/remove a role from specific host or an environment", required=False)
+parser.add_argument("-role ", "--role", action='store', help="pass role name with -deauth-role argument. Values: hypervisor|image|storage", required=False)
+parser.add_argument("-state ", "--state", action='store', help="pass state info of play with -deauth-role argument. Values: absent|present", required=False)
+parser.add_argument("-ip ", "--ip", action='store', help="pass ip with -deauth-role argument. Values: string (OPTIONAL). env value will take precdence if not provided.", required=False)
+parser.add_argument("-onprem ", "--onprem", action='store', help="set onprem yes to enable on-prem specific options.", required=False)
+parser.add_argument("-ip-addr","--ip-addr", required=True, help="to be used with onprem option. The VIP IP address to add to /etc/hosts.")
+parser.add_argument("-fqdn","--fqdn", required=True, help="to be used with onprem option. Set the FQDN of the UI.")
+parser.add_argument("-fqdninfra","--fqdninfra", required=True, help="to be used with onprem option. Set The Infra FQDN of the UI.")
+args = parser.parse_args()
+
+###############################################################################
+#                           Global section                                    #
+###############################################################################
+# Directory creations
+yaml_data = {}
+if args.env_file:
+   yaml_data = pcdInstallHelper.loadEnvFile(args.env_file)
+env_config = {
+  "portal": args.portal or yaml_data.get("portal"),
+  "region": args.region or yaml_data.get("region"),
+  "env": args.env or yaml_data.get("env"),
+}
+for key in ["portal", "region", "env"]:
+  if not env_config[key]:
+    print(f"Error: '{key}' must be provided either in the YAML file or as a command-line argument.", file=sys.stderr)
+    sys.exit(1)
+# Directory creations
+home = os.getenv("HOME")
+#userLocalDir = pcdInstallHelper.createDir(f"{home}/.config/{args.clustername}")
+clustername = args.portal if args.portal else yaml_data.get("portal")
+sitename = args.region if args.region else yaml_data.get("region")
+subsite = args.env if args.env else yaml_data.get("env")
+
+###############################################################################
+#                           preflight checks                                   #
+###############################################################################
+
+# user provided cluster config directory location and validation
+openStackCloudCredDir = f"{home}/.config/openstack/"
+userInputDir = "user_configs"
+clusterTemplateDir = f"{current_dir}/{userInputDir}/{clustername}"
+siteTemplateDir = f"{current_dir}/{userInputDir}/{clustername}/{sitename}"
+playBookDirectory = f"{siteTemplateDir}/playbooks"
+clusterVarsDir = f"{current_dir}/{userInputDir}/{clustername}/{siteTemplateDir}/vars"
+UserHostsConfigFilePath = f"{clusterTemplateDir}/{sitename}/data_plane/{subsite}/{clustername}-{sitename}-{subsite}-hostagentconfigs.yaml"
+
+# Check if user config templates directory exists
+checkTemplateDir = subprocess.run(['stat', f'{openStackCloudCredDir}'], stdout=subprocess.PIPE)
+if checkTemplateDir.returncode != 0:
+    print("No cloud credentials configured. Create the directory containing the required details to access the cloud and try again")
+    sys.exit(1)
+print("cloud region credential directory present. proceeding...")
+
+
+def checkLocalDir():
+    checkTemplateDir = subprocess.run(['stat', f'{userInputDir}'], stdout=subprocess.PIPE)
+    if checkTemplateDir.returncode != 0:
+        print(f"No user defined templates directory named {userInputDir}. Create the directory containing the required resource templates structure and try again")
+        sys.exit(1)
+    print(f"User defined templates directory found at {userInputDir}")
+    
+    checkTemplateDir = subprocess.run(['stat', f'{clusterTemplateDir}'], stdout=subprocess.PIPE)
+    if checkTemplateDir.returncode != 0:
+        print(f"No user defined region templates directory found. Create the directory named {clusterTemplateDir} under {userInputDir} directory containing the required resource templates structure and try again")
+        sys.exit(1)
+    print("User defined region templates directory found..")
+    
+    checkTemplateDir = subprocess.run(['stat', f'{siteTemplateDir}'], stdout=subprocess.PIPE)
+    if checkTemplateDir.returncode != 0:
+        print(f"No site definition provided. Create the directory named {siteTemplateDir}' under {clusterTemplateDir} containing the required resource templates  hiararchy and try again")
+        sys.exit(1)
+    print("User defined site templates directory found..")
+    
+
+# User defined config file location references
+bluePrintFilePath = f'{current_dir}/{userInputDir}/{clustername}/{sitename}/control_plane/{clustername}-{sitename}-blueprints-config.yaml'
+hostConfigFilePath = f'{current_dir}/{userInputDir}/{clustername}/{sitename}/control_plane/{clustername}-{sitename}-hostconfigs.yaml'   
+networkConfigFilePath = f'{current_dir}/{userInputDir}/{clustername}/{sitename}/control_plane/{clustername}-{sitename}-networks.yaml'
+
+def checkUserConfigDefinition(filepath):
+    try:
+        with open(filepath, "r") as f:
+            data = yaml.safe_load(f)
+    except Exception as e:
+        sys.exit(f"Error loading YAML file: {e}")
+    for region_name, region_data in data["regions"].items():
+        if "environments" not in region_data:
+            continue
+        for env_name, env_data in region_data["environments"].items():
+            if "hosts" not in env_data:
+                continue
+            for host_ip, host_data in env_data["hosts"].items():
+                roles = host_data.get("roles", [])
+                if "persistent-storage" in roles:
+                    persistent_storage=host_data["persistent_storage"]
+                    print(f"list of backend labels: {persistent_storage}")
+                    if isinstance(persistent_storage, dict):
+                      if "backends" not in persistent_storage or not isinstance(persistent_storage["backends"], list) or not persistent_storage["backends"]:
+                        sys.exit(f"Error: Host {host_ip} has 'persistent-storage' role, but 'backends' is empty or not a list. Please provide at least one backend and try again.")
+
+def setupUserConfigResources(current_dir, clustername, sitename):
+    print(f"Creating and setting up user config for the playbooks for site {sitename}..")
+    # Create user directories
+    pcdInstallHelper.createDir(f"{current_dir}/user_configs")
+    pcdInstallHelper.createDir(f"{current_dir}/user_configs/{clustername}/{sitename}/control_plane")
+    pcdInstallHelper.createDir(f"{current_dir}/user_configs/{clustername}/{sitename}/data_plane")
+    pcdInstallHelper.createDir(f"{current_dir}/user_configs/{clustername}/{sitename}/data_plane/{subsite}")
+    pcdInstallHelper.createDir(f"{current_dir}/user_configs/{clustername}/{sitename}/node-onboarding/")
+    #pcdInstallHelper.getShellOutput(f"cp user_resource_examples/DIR_CLOUD_NAME/DIR_REGION_NAME/control_plane/CLOUDNAME-SITENAME-blueprints-config.yaml {current_dir}/user_configs/{clustername}/{sitename}/control_plane/{clustername}-{sitename}-blueprints-config.yaml")
+    #pcdInstallHelper.getShellOutput(f"cp user_resource_examples/DIR_CLOUD_NAME/DIR_REGION_NAME/control_plane/CLOUDNAME-SITENAME-hostconfigs.yaml {current_dir}/user_configs/{clustername}/{sitename}/control_plane/{clustername}-{sitename}-hostconfigs.yaml")
+    #pcdInstallHelper.getShellOutput(f"cp user_resource_examples/DIR_CLOUD_NAME/DIR_REGION_NAME/control_plane/CLOUDNAME-SITENAME-networks.yaml {current_dir}/user_configs/{clustername}/{sitename}/control_plane/{clustername}-{sitename}-networks.yaml")
+    #pcdInstallHelper.getShellOutput(f"cp user_resource_examples/host_onboard_data.yaml {current_dir}/user_configs/{clustername}/{sitename}/node-onboarding/{clustername}-{sitename}-nodesdata.yaml")
+    #pcdInstallHelper.getShellOutput(f"cp user_resource_examples/environment-file.yaml {current_dir}/user_configs/{clustername}/{sitename}/{clustername}-{sitename}-environment.yaml")
+
+def setupPlaybookConfigResources(current_dir, clustername, sitename):
+    # Create rendered play directories
+    pcdInstallHelper.createDir(f"{clustername}-play_data")
+    pcdInstallHelper.createDir(f"{clustername}-play_data/{sitename}")
+    #pcdInstallHelper.createDir(f"{clustername}-play_data/{sitename}/logs/")
+    #pcdInstallHelper.getShellOutput(f"touch {clustername}-play_data/{sitename}/logs/pcd.log")
+    pcdInstallHelper.createDir(f"{clustername}-play_data/{sitename}/group_vars")
+    pcdInstallHelper.createDir(f"{clustername}-play_data/{sitename}/inventory")
+    #pcdInstallHelper.createDir(f"{clustername}-play_data/{sitename}/collections")
+    pcdInstallHelper.createDir(f"{clustername}-play_data/{sitename}/inventory/{subsite}")
+    # Create the roles directory for the site
+    pcdInstallHelper.createDir(f"{clustername}-play_data/{sitename}/playbooks")
+    pcdInstallHelper.createDir(f"{clustername}-play_data/{sitename}/playbooks/roles")
+    pcdInstallHelper.createDir(f"{clustername}-play_data/{sitename}/playbooks/roles/common/")
+    pcdInstallHelper.createDir(f"{clustername}-play_data/{sitename}/playbooks/roles/common/tasks/")
+    pcdInstallHelper.createDir(f"{clustername}-play_data/{sitename}/playbooks/roles/hypervisor")
+    pcdInstallHelper.createDir(f"{clustername}-play_data/{sitename}/playbooks/roles/image-library")
+    pcdInstallHelper.createDir(f"{clustername}-play_data/{sitename}/playbooks/roles/persistent-storage")
+    pcdInstallHelper.createDir(f"{clustername}-play_data/{sitename}/playbooks/roles/node_onboard/")
+    pcdInstallHelper.createDir(f"{clustername}-play_data/{sitename}/playbooks/roles/node_onboard/tasks")
+    pcdInstallHelper.createDir(f"{clustername}-play_data/{sitename}/tasks")
+    pcdInstallHelper.createDir(f"{clustername}-play_data/{sitename}/vars")
+    os.system(f"cp -r {current_dir}/tasks/01-on_prem-trust-mgmt-certs.yml {clustername}-play_data/{sitename}/tasks/")
+    os.system(f"cp -r {current_dir}/tasks/token.yml {clustername}-play_data/{sitename}/playbooks/roles/common/tasks/")
+    os.system(f"cp -r {current_dir}/tasks/hostid.yml {clustername}-play_data/{sitename}/playbooks/roles/common/tasks/")
+    os.system(f"cp -r {current_dir}/roles/hypervisor/tasks {clustername}-play_data/{sitename}/playbooks/roles/hypervisor/")
+    os.system(f"cp -r {current_dir}/roles/image-library/tasks {clustername}-play_data/{sitename}/playbooks/roles/image-library/")
+    os.system(f"cp -r {current_dir}/roles/persistent-storage/tasks {clustername}-play_data/{sitename}/playbooks/roles/persistent-storage/")
+    os.system(f"cp -r {current_dir}/tasks/cloud-ctl.yml {clustername}-play_data/{sitename}/playbooks/roles/node_onboard/tasks/")
+    os.system(f"cp -r {current_dir}/tasks/hostagent.yml {clustername}-play_data/{sitename}/playbooks/roles/node_onboard/tasks/")
+    # add hosts inventory config
+    inventory_file = os.path.join(f"{current_dir}/inventory", "hosts")
+    inventory_data = {
+        "all": {
+            "hosts": {
+                "localhost": {
+                    "ansible_connection": "local"
+                }
+            }
+        }
+    }
+    with open(inventory_file, "w") as yaml_file:
+        yaml.dump(inventory_data, yaml_file, default_flow_style=False, sort_keys=False)
+    # create a main.yml for roles mapping
+    file_path = os.path.join(f"{clustername}-play_data/{sitename}/playbooks/roles/node_onboard/tasks", "main.yml")
+    task_data = [
+        {"include_tasks": "./tasks/cloud-ctl.yml"},
+        {"include_tasks": "./tasks/hostagent.yml"}
+    ]
+    with open(file_path, "w") as yaml_file:
+        yaml.dump(task_data, yaml_file, default_flow_style=False, explicit_start=True)
+
+    #copy the ansible collections to the site directory
+    #os.system(f"cp -r {current_dir}/ansible-collections-pf9 {clustername}-play_data/{sitename}/collections")
+
+###############################################################################
+#                        Other utilities section                              #
+###############################################################################
+# Remove a role, pass with -portal,site and env value and the ip as optional
+if args.deauth_role == "yes":
+    if args.ip:
+        pcdInstallHelper.deauthorize_host_role(inventorypath=f'{clustername}-play_data/{sitename}/inventory/{subsite}/hosts', playbookpath=f'{clustername}-play_data/{sitename}/playbooks/{clustername}-{sitename}-{subsite}-node-onboard.yaml',cloud_name=f'{sitename}',enviroment=f'{subsite}', role=f'{args.role}', rolestate=f'{args.state}', ipaddr=f'{args.ip}')
+        sys.exit(0) 
+    pcdInstallHelper.deauthorize_host_role(inventorypath=f'{clustername}-play_data/{sitename}/inventory/{subsite}/hosts', playbookpath=f'{clustername}-play_data/{sitename}/playbooks/{clustername}-{sitename}-{subsite}-node-onboard.yaml',cloud_name=f'{sitename}',enviroment=f'{subsite}', role=f'{args.role}', rolestate=f'{args.state}')
+###############################################################################
+#                        Template rendering section                           #
+###############################################################################
+# fetch cloud auth details/credentials:
+if args.setup_environment == "yes":
+    setupUserConfigResources(current_dir=current_dir, clustername=clustername, sitename=sitename)
+    setupPlaybookConfigResources(current_dir=current_dir, clustername=clustername, sitename=sitename)
+    pcdInstallHelper.renderEnvtemplate(template_path=f"{current_dir}/user_resource_examples/templates/environment-file.yaml.j2", output_path=f"{current_dir}/{userInputDir}/{clustername}/{sitename}/{clustername}-{sitename}-{subsite}-environment.yaml", portal=clustername, region=sitename, env=subsite, url=f"{args.url}")
+    if args.ostype == "mac":
+        print(f"installing collection and related dependency for {args.ostype} enviroment")
+        print("=========================================================================")
+        pcdInstallHelper.getShellOutput("make install_collection", True)
+    elif args.ostype == "ubuntu":
+        print(f"installing collection and related dependency for {args.ostype} enviroment")
+        pcdInstallHelper.getShellOutput("bash setup-local.sh", True)
+    else:
+        print("Generated directory structures without --ostype option set..")
+    # experimental - add additonal render
+    print("Generating user input templates samples for the resources..")
+    pcdInstallHelper.render_vars_template(f"{current_dir}/user_configs/{clustername}/{sitename}/{clustername}-{sitename}-{subsite}-environment.yaml", f"{current_dir}/user_resource_examples/templates/", 'default-blueprints.yaml.j2', bluePrintFilePath)
+    pcdInstallHelper.render_vars_template(f"{current_dir}/user_configs/{clustername}/{sitename}/{clustername}-{sitename}-{subsite}-environment.yaml", f"{current_dir}/user_resource_examples/templates/", 'default-hostconfigs.yaml.j2', hostConfigFilePath)
+    pcdInstallHelper.render_vars_template(f"{current_dir}/user_configs/{clustername}/{sitename}/{clustername}-{sitename}-{subsite}-environment.yaml", f"{current_dir}/user_resource_examples/templates/", 'default-networks.yaml.j2', networkConfigFilePath)
+    pcdInstallHelper.render_vars_template(f"{current_dir}/user_configs/{clustername}/{sitename}/{clustername}-{sitename}-{subsite}-environment.yaml", f"{current_dir}/user_resource_examples/templates/", 'host_onboard_data.yaml.j2', f"{current_dir}/user_configs/{clustername}/{sitename}/node-onboarding/{clustername}-{sitename}-nodesdata.yaml")
+if args.show_dir == "yes":
+    print("This needs to have logic and function to support")
+
+if args.create_hostagents_configs == "yes":
+    print("Generating inventory files..")
+    # Generate inventory files
+    hostFile = f"{clustername}-play_data/{sitename}/inventory/{args.env}/hosts"
+    checkUserConfigDefinition(UserHostsConfigFilePath)
+    pcdInstallHelper.render_vars_template(UserHostsConfigFilePath, f'{template_dir}/templates', 'hosts_inventory.yaml.j2', f'{clustername}-play_data/{sitename}/inventory/{subsite}/hosts')
+    # Generate hostagent playbooks
+    pcdInstallHelper.render_vars_template(UserHostsConfigFilePath, f'{template_dir}/templates', 'node_onboard.yaml.j2', f'{clustername}-play_data/{sitename}/playbooks/{clustername}-{sitename}-{subsite}-node-onboard.yaml')
+
+if args.create_blueprints == "yes":
+    print("Generating blueprint vars files..")
+    pcdInstallHelper.render_vars_template(bluePrintFilePath, f'{template_dir}/vars/templates', 'cluster-blueprint-vars.yaml.j2', f'{clustername}-play_data/{sitename}/vars/{clustername}-{sitename}_blueprints_vars.yaml')
+    pcdInstallHelper.generate_playbook(f'{clustername}-play_data/{sitename}/vars/{clustername}-{sitename}_blueprints_vars.yaml', f'{template_dir}/playbooks/templates/', 'blueprint-setup.yml.j2', f'{clustername}-play_data/{sitename}/playbooks', 'blueprints', clustername, sitename)
+
+if args.create_hostconfigs == "yes":
+   print("Generating hostconfigs vars files..")
+   pcdInstallHelper.render_vars_template(hostConfigFilePath, f'{template_dir}/vars/templates', 'hostconfig-vars.yml.j2', f'{clustername}-play_data/{sitename}/vars/{clustername}-{sitename}_hostconfigs_vars.yaml')
+   pcdInstallHelper.generate_playbook(f'{clustername}-play_data/{sitename}/vars/{clustername}-{sitename}_hostconfigs_vars.yaml', f'{template_dir}/playbooks/templates/', 'hostconfigs-create.yml.j2', f'{clustername}-play_data/{sitename}/playbooks', 'hostconfigs', clustername, sitename)
+ 
+if args.create_networks_configs == "yes":
+    print("Generating network vars files..")
+    pcdInstallHelper.render_vars_template(networkConfigFilePath, f'{template_dir}/vars/templates', 'network-create-vars.yaml.j2', f'{clustername}-play_data/{sitename}/vars/{clustername}-{sitename}_networks_vars.yaml')
+    pcdInstallHelper.generate_playbook(f'{clustername}-play_data/{sitename}/vars/{clustername}-{sitename}_networks_vars.yaml', f'{template_dir}/playbooks/templates/', 'networks-setup.yaml.j2', f'{clustername}-play_data/{sitename}/playbooks', 'networks', clustername, sitename)
+
+# Read the user provided file and procduce the hosts onboard data
+if args.render_userconfig:
+    print("Generating node config data from shared YAML file")
+    print(args.render_userconfig)
+    pcdInstallHelper.render_userconfig_templates(f"{args.render_userconfig}", f"{template_dir}/templates/user_config_node_inventory.yml.j2", f"{UserHostsConfigFilePath}")
+
+#Produce used template merge file
+if args.create_templates_json == "yes":
+    print("Generating extended template file for the user provided configuration...\n")
+    #userConfigDirectory = f'{current_dir}/{clustername}-templates'
+    userConfigFiles = [os.path.join(f"{clusterTemplateDir}/", f) for f in os.listdir(f"{clusterTemplateDir}/") if f.endswith(('.yaml', '.yml'))]
+    userConfigYaml = pcdInstallHelper.merge_yaml_files(userConfigFiles)
+    pcdInstallHelper.createDir(f"{clusterTemplateDir}/jsonsave")
+    pcdInstallHelper.generate_save_json(userConfigYaml, f'{clusterTemplateDir}/jsonsave/userConfigTemplates.json')
+    print(f"Generated full template of user provided configuration and saved under location: \n{clusterTemplateDir}/jsonsave/")
+elif args.create_templates_json == "no" or args.create_templates_json == " ":
+    # print("no create-hostconfigs passed or value set to no. Not generating hostconfigs template..")
+    pass
+
+
+###############################################################################
+#                        Playbook apply section                              #
+###############################################################################
+
+if args.apply_hostconfigs:
+    checkLocalDir()
+    print("Applying hostconfigs templates.. ")
+    pcdInstallHelper.run_ansible_playbook(f'{clustername}-play_data/{sitename}/playbooks/{clustername}-hostconfigs_deploy.yaml', 'inventory/hosts' ,{"cloud_name": f"{sitename}", "cloudname": f"{sitename}"})
+
+if args.apply_blueprints:
+    checkLocalDir()
+    print("Applying blueprint config templates.. ")
+    pcdInstallHelper.run_ansible_playbook(f'{clustername}-play_data/{sitename}/playbooks/{clustername}-blueprints_deploy.yaml', 'inventory/hosts', {"cloud_name": f"{sitename}", "cloudname": f"{sitename}"})
+
+if args.apply_networks_configs:
+    checkLocalDir()
+    print("Applying blueprint config templates.. ")
+    pcdInstallHelper.run_ansible_playbook(f'{clustername}-play_data/{sitename}/playbooks/{clustername}-networks_deploy.yaml', 'inventory/hosts', {"cloud_name": f"{sitename}", "cloudname": f"{sitename}"})
+
+if args.apply_hosts_onboard:
+    checkLocalDir()
+    print("Triggering node onboarding playbooks..")
+    pcdInstallHelper.run_ansible_playbook(f'{clustername}-play_data/{sitename}/playbooks/{clustername}-{sitename}-{subsite}-node-onboard.yaml', f"{clustername}-play_data/{sitename}/inventory/{subsite}/hosts", {"cloud_name": f"{sitename}", "environment": f"{subsite}"})
+
+if args.onprem:
+    print("Setting mgmt trust certificates on hosts..")
+    pcdInstallHelper.run_ansible_playbook(f'{clustername}-play_data/{sitename}/tasks/01-on_prem-trust-mgmt-certs.yml', f"{clustername}-play_data/{sitename}/inventory/{subsite}/hosts", {"cloud_name": f"{sitename}", "environment": f"{subsite}",  "IP_ADDRESS":f"{args.ip_addr}", "FQDN":f"{args.fqdn}", "FQDNINFRA":f"{args.fqdninfra}" })
+

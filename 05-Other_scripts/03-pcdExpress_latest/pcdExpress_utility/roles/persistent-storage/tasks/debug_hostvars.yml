@@ -1,0 +1,4 @@
+#---
+#- name: Debug hostvars
+#  debug:
+#    msg: "{{ hostvars }}"

@@ -1,0 +1,21 @@
+pcd:
+  prod:
+    {%- raw %} 
+    cloud: "{{ cloudname }} " 
+    {%- endraw %}
+    url : "{{ prod.url }}" 
+    hostconfigs:
+      {%- for hostconfig_name, hostconfig_data in prod.hostconfigs.items() %}
+        {{ hostconfig_name }}:
+          name: "{{ hostconfig_data.name }}"
+          clusterName: "{{ hostconfig_data.clusterName }}"
+          networkLabels:
+            {%- for label_name, label_value in hostconfig_data.networkLabels.items() %}
+            "{{ label_name }}": "{{ label_value }}"
+            {%- endfor %}
+          vmConsoleInterface: "{{ hostconfig_data.vmConsoleInterface }}"
+          hostLivenessInterface: "{{ hostconfig_data.hostLivenessInterface }}"
+          tunnelingInterface: "{{ hostconfig_data.tunnelingInterface }}"
+          imagelibInterface: "{{ hostconfig_data.imagelibInterface }}"
+          mgmtInterface: "{{ hostconfig_data.mgmtInterface }}"
+      {%- endfor %}

@@ -1,0 +1,38 @@
+prod:
+  url: "{{ url }}"
+  cloud: "{{ region }}"
+  networks:
+    testnet2:
+        name: testnet2
+        admin_state_up: true
+        mtu: 1500
+        shared: true
+        availability_zone_hints: []
+        availability_zones: []
+        ipv4_address_scope: null
+        ipv6_address_scope: null
+        'router:external': true
+        description: 'test configuration'
+        port_security_enabled: true
+        is_default: false
+        tags: []
+        'provider:network_type': vlan
+        'provider:physical_network': physnet1
+        'provider:segmentation_id': 2012
+    testnet3:
+        name: testnet3
+        admin_state_up: true
+        mtu: 1500
+        shared: true
+        availability_zone_hints: []
+        availability_zones: []
+        ipv4_address_scope: null
+        ipv6_address_scope: null
+        'router:external': true
+        description: 'test configuration'
+        port_security_enabled: true
+        is_default: false
+        tags: []
+        'provider:network_type': vlan
+        'provider:physical_network': physnet2
+        'provider:segmentation_id': 2025

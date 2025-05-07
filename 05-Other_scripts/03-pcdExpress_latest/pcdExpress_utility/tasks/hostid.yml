@@ -1,0 +1,11 @@
+- shell: grep host_id /etc/pf9/host_id.conf | cut -d '=' -f2 | sed -e 's/ //g'
+  register: hostid
+
+- name: Set fact for Host ID
+  set_fact:
+    hostid: "{{ hostid.stdout }}"
+    tags: hostid
+
+- name: Display Host ID
+  debug:
+    var: hostid

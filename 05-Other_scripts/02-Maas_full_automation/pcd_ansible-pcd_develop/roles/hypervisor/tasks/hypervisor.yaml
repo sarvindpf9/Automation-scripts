@@ -1,0 +1,11 @@
+---
+- name: Set PCD Roles
+  pf9.pcd.roles:
+    state: "{{ hypervisor | default('present') }}"
+    mgmt_url: "{{ hostvars['localhost']['pcd_region_portal'] }}"
+    token: "{{ keystone_token }}"
+    roles: "hypervisor"
+    host_id: "{{ hostid }}"
+    #hostconfig: "{{ hostvars['localhost']['hostconfig'] }}"
+    #hostconfig: "{{ hostvars['inventory_hostname']['hostconfigs'] }}"
+    hostconfig: "{{ hostconfig }}"

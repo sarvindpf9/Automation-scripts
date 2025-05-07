@@ -1,0 +1,31 @@
+---
+- hosts: localhost
+  connection: local
+  become: no
+  vars:
+    cloud: "{{ cloudname }}"
+  gather_facts: false
+  tasks:
+    - import_tasks: ../tasks/token.yml
+
+- hosts: "{{ enviroment }}" 
+  connection: ssh
+  gather_facts: false
+  tasks:
+    - import_tasks: ../tasks/hostid.yml
+
+    - name: Set PCD Roles
+      pf9.pcd.roles:
+        state: present
+        {%- raw %}
+        mgmt_url: "{{ pcd.url }}"
+        {%- endraw %}
+        {%- raw %}
+        token: "{{ hostvars.localhost.keystone_token }}"
+        {%- endraw %}
+        {%- raw %}
+        host_id: "{{ hostid }}"
+        {%- endraw %}
+        {%- raw %}
+        roles: "{{ pcd_roles }}"
+        {%- endraw %}

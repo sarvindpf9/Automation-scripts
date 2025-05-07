@@ -1,0 +1,37 @@
+---
+- hosts: all
+  become: yes
+  gather_facts: no
+
+  tasks:
+    - name: Add IP and FQDN for workload region to /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ IP_ADDRESS }} {{ FQDN }}"
+        state: present
+
+    - name: Add IP and FQDN for the infra region to /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ IP_ADDRESS }} {{ FQDNINFRA }}"
+        state: present
+
+    - name: Export environment variables for SSL certificate retrieval
+      shell: |
+        export FQDN="{{ FQDN }}"
+        export FQDNINFRA="{{ FQDNINFRA }}"
+
+        openssl s_client -showcerts -connect $FQDNINFRA:443 2>/dev/null </dev/null | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' > $FQDN-du.crt
+        openssl s_client -showcerts -connect $FQDN:443 2>/dev/null </dev/null | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' > $FQDNINFRA-infra.crt
+
+        sudo cp $FQDN-du.crt /usr/local/share/ca-certificates
+        sudo cp $FQDNINFRA-infra.crt /usr/local/share/ca-certificates
+        sudo update-ca-certificates
+        
+        echo "Testing connection to $FQDN and $FQDNINFRA"
+        echo
+        curl https://$FQDN/keystone/v3
+        echo
+        curl https://$FQDNINFRA/keystone/v3
+      args:
+        executable: /bin/bash

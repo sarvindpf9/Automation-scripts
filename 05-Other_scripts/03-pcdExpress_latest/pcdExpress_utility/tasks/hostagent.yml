@@ -1,0 +1,25 @@
+- name: Check for existing host_id
+  become: true
+  stat:
+    path: /etc/pf9/host_id.conf
+  register: host_id_conf
+- block:
+    - name: Set Cloud-ctl Config
+      become: true
+      command: |-
+        cloud-ctl config set
+        -u '{{ hostvars['localhost']['pcd_region_portal'] }}'
+        -e '{{ hostvars['localhost']['cloud_username'] }}'
+        -p '{{ hostvars['localhost']['cloud_password'] }}'
+        -t '{{ hostvars['localhost']['cloud_project_name'] }}'
+        -r '{{ hostvars['localhost']['cloud_region_name'] }}'
+        --no-prompt
+        --verbose
+    - name: Prep Node
+      become: true
+      command: |-
+        cloud-ctl prep-node
+        --skip-checks
+        --no-prompt
+        --verbose
+  when: not host_id_conf.stat.exists

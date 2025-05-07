@@ -1,0 +1,16 @@
+- name: Get Auth Token
+  become: no
+  openstack.cloud.auth:
+    cloud: "{{ cloud_name }}"
+  register: result
+
+- set_fact:
+    keystone_token: "{{ result.auth_token }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: Save keystone token for the current operation
+  add_host:
+    name: "global_vars"
+    keystone_token: "{{ keystone_token }}"
+  no_log: true

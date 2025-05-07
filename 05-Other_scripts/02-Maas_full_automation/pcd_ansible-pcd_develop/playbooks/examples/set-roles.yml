@@ -1,0 +1,23 @@
+---
+- hosts: localhost
+  connection: local
+  become: no
+  vars:
+    cloud: pcd06
+  gather_facts: false
+  tasks:
+    - import_tasks: ../tasks/token.yml
+
+- hosts: pcd_prod
+  connection: ssh
+  gather_facts: false
+  tasks:
+    - import_tasks: ../tasks/hostid.yml
+
+    - name: Set PCD Roles
+      pf9.pcd.roles:
+        state: present
+        mgmt_url: "{{ pcd.prod.url }}"
+        token: "{{ hostvars.localhost.keystone_token }}"
+        host_id: "{{ hostid }}"
+        roles: "{{ pcd_roles }}"

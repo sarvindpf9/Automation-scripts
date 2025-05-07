@@ -1,0 +1,26 @@
+---
+- hosts: localhost
+  connection: local
+  become: no
+  gather_facts: false
+  tasks:
+    - name: Read configuration for requested cloud
+      openstack.cloud.config:
+        clouds:
+          - my_pcd
+      register: cloud_config
+
+    - name: Set the cloud variable
+      set_fact:
+        cloud_auth_url: "{{ cloud_config['clouds'][0]['config']['auth']['auth_url'] }}"
+        cloud_username: "{{ cloud_config['clouds'][0]['config']['auth']['username'] }}"
+        cloud_password: "{{ cloud_config['clouds'][0]['config']['auth']['password'] }}"
+        cloud_project_name: "{{ cloud_config['clouds'][0]['config']['auth']['project_name'] }}"
+        cloud_region_name: "{{ cloud_config['clouds'][0]['config']['region_name'] }}"
+
+- hosts: pcd_prod
+  connection: ssh
+  gather_facts: false
+  tasks:
+    - import_tasks: ../tasks/cloud-ctl.yml
+    - import_tasks: ../tasks/hostagent.yml

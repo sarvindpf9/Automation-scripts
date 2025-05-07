@@ -1,0 +1,40 @@
+prod:
+  url: 'https://sarvind-titan.app.staging-pcd.platform9.com'
+  cloud: my_pcd
+  subnets:
+    subnet1:
+        name: subnet1
+        network_name: test-sub1
+        ip_version: 4
+        enable_dhcp: true
+        ipv6_ra_mode: null
+        ipv6_address_mode: null
+        gateway_ip: 192.168.4.1
+        cidr: 192.168.4.0/24
+        allocation_pools:
+          - start: 192.168.4.30
+            end: 192.168.4.40
+        host_routes:
+          - destination: 192.168.1.0/24
+            nexthop: 192.168.4.1
+        dns_nameservers:
+          - 8.8.8.8
+        description: ""
+    subnet2:
+        name: subnet2
+        network_name: test-sub1
+        ip_version: 4
+        enable_dhcp: true
+        ipv6_ra_mode: null
+        ipv6_address_mode: null
+        gateway_ip: 192.168.5.1
+        cidr: 192.168.5.0/24
+        allocation_pools:
+          - start: 192.168.5.30
+            end: 192.168.5.40
+        host_routes:
+          - destination: 192.168.1.0/24
+            nexthop: 192.168.5.1
+        dns_nameservers:
+          - 8.8.8.8
+        description: ""

@@ -1,0 +1,38 @@
+pcd:
+  prod: 
+    {%- raw %} 
+    cloud: "{{ cloud_name }}"
+    {%- endraw %}
+    url : "{{ prod.url }}"  
+    blueprints:
+      {%- for blueprints_name, blueprints_data in prod.blueprints.items() %}
+      {{ blueprints_name }}:
+        name: {{ blueprints_data.name |  default('default') }}
+        networkingType: {{ blueprints_data.networkingType | default('ovn') }}
+        enableDistributedRouting: {{ blueprints_data.enableDistributedRouting | default('true') }}
+        dnsDomainName: {{ blueprints_data.dnsDomainName | default('cluster.local')  }}
+        vmHighAvailability:
+          enabled: {{ blueprints_data.vmHighAvailability.enabled | default('true') }}
+        autoResourceRebalancing:
+          enabled: {{ blueprints_data.autoResourceRebalancing.enabled | default('true') }}
+          rebalancingStrategy : {{ blueprints_data.autoResourceRebalancing.rebalancingStrategy | default('vm_workload_consolidation') }}
+          rebalancingFrequencyMins: {{ blueprints_data.autoResourceRebalancing.rebalancingFrequencyMins | default(5) }}
+        virtualNetworking:
+          enabled: {{ blueprints_data.virtualNetworking.enabled | default('true') }}
+          underlayType: {{ blueprints_data.virtualNetworking.underlayType | default('vlan') }}
+          vnidRange: {{ blueprints_data.virtualNetworking.vnidRange | default('3000:3500') }}
+        imageLibraryStorage: {{ blueprints_data.imageLibraryStorage | default('/var/opt/imagelibrary/data/') }}
+        vmStorage: {{ blueprints_data.vnidRange  | default('/opt/data/instances/') }}
+        storageBackends: 
+           {%- for backend_name, backend_data in blueprints_data.storageBackends.items() %}
+           {{ backend_name }}:
+              {%- for sub_backend, sub_backend_data in backend_data.items() %}
+              {{ sub_backend }}:
+                driver: {{ sub_backend_data.driver }}
+                config:
+                  {%- for config_key, config_value in sub_backend_data.config.items() %}
+                  {{ config_key }}: "{{ config_value }}"
+                  {%- endfor %}
+              {%- endfor %}
+           {%- endfor %}  
+      {%- endfor %}
