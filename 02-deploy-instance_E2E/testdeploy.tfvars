@@ -1,0 +1,8 @@
+openstack_user_name = "sa@platform9.com"
+openstack_tenant_name = "service"
+openstack_password = "Platform9!"
+openstack_auth_url = "https://sa-demo-region2.app.qa-pcd.platform9.com/keystone/v3"
+openstack_region = "region2"
+image_name = "cirros-0.6.3"
+flavor_name = "s1.tiny"
+glance_image_name = "cirros-0.6.3-x86_64-disk.img"
