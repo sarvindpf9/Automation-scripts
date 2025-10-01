@@ -1,0 +1,36 @@
+
+---
+- name: Set aio-max-nr sysctl and set the  nova override parameters
+  hosts: all
+  become: yes
+  tasks:
+    - name: Set aio-max-nr immediately via echo
+      shell: "echo 2097152 > /proc/sys/fs/aio-max-nr"
+
+    - name: Show current aio-max-nr value
+      command: cat /proc/sys/fs/aio-max-nr
+      register: aio_max_nr_value_new
+
+    - name: Print current aio-max-nr value
+      debug:
+        var: aio_max_nr_value_new.stdout
+
+    - name: Persistently set aio-max-nr in sysctl.conf
+      lineinfile:
+        path: /etc/sysctl.conf
+        regexp: '^fs.aio-max-nr'
+        line: 'fs.aio-max-nr = 2097152'
+        state: present
+
+    #- name: Reload sysctl settings
+    #  command: sysctl -p
+
+    - name: Copy script to remote
+      copy:
+        src: apply_reap_libvirt.sh
+        dest: /tmp/apply_reap_libvirt.sh
+        mode: '0755'
+
+    - name: Execute reap apply script
+      shell: /tmp/apply_reap_libvirt.sh
+

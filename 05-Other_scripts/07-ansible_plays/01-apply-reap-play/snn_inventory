@@ -1,0 +1,159 @@
+all:
+  vars:
+    pcd:
+      cloud: snn
+      url: "https://disw-eu-snn.app.pcd.platform9.com/"
+snn:
+  vars:
+    pcd:
+      region: snn
+  children:
+    stage:
+      vars:
+        environment: stage
+      hosts:
+        snnhv0004.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0006.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0007.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0008.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0009.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0010.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0011.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0012.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0013.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0014.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0015.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0016.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0017.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0018.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0019.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0020.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0021.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0022.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0023.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0024.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0025.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0026.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0027.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0028.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0029.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0030.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0031.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0032.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0033.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0034.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0035.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0036.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0037.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0038.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0039.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0040.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0041.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0042.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0043.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0044.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0045.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0046.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0047.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0048.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0049.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0050.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0060.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+        snnhv0061.ies.mentorg.com:
+          ansible_ssh_user: "gvs"
+          ansible_ssh_private_key_file: "/home/gvs/.ssh/id_rsa"
+

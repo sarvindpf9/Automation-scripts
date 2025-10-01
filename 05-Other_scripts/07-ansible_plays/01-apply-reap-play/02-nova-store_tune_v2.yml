@@ -1,0 +1,44 @@
+---
+- name: Conditionally apply aio-max or script
+  hosts: all
+  become: yes
+  vars:
+    apply_aio_max: false     
+    apply_script: false  
+  tasks:
+    - name: Set aio-max-nr immediately via echo
+      shell: "echo 2097152 | tee /proc/sys/fs/aio-max-nr"
+      when: apply_aio_max | bool
+
+    - name: Show current aio-max-nr value
+      command: cat /proc/sys/fs/aio-max-nr
+      register: aio_max_nr_value_new
+      when: apply_aio_max | bool
+
+    - name: Print current aio-max-nr value
+      debug:
+        var: aio_max_nr_value_new.stdout
+      when: apply_aio_max | bool
+
+    - name: Persistently set aio-max-nr in sysctl.conf
+      lineinfile:
+        path: /etc/sysctl.conf
+        regexp: '^fs.aio-max-nr'
+        line: 'fs.aio-max-nr = 2097152'
+        state: present
+      when: apply_aio_max | bool
+
+    # - name: Reload sysctl settings
+    #   command: sysctl -p
+    #   when: apply_aio_max | bool
+
+    - name: Copy script to remote
+      copy:
+        src: apply_reap_libvirt.sh
+        dest: /tmp/apply_reap_libvirt.sh
+        mode: '0755'
+      when: apply_script | bool
+
+    - name: Execute reap apply script
+      shell: /tmp/apply_reap_libvirt.sh
+      when: apply_script | bool
