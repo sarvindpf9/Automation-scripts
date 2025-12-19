@@ -1,0 +1,10 @@
+{
+  "admin_password": "Platform9!",
+  "aim": "pcdv-dev-3",
+  "regionname": "region1",
+  "options": {
+    "multi_region": "true",
+    "chart_url": "https://ops-opex-pcd-dev-pcd-charts.s3.us-west-2.amazonaws.com/kdu/kdu-92-pcd-v2025.8.tgz",
+    "parallel": "false"
+  }
+}

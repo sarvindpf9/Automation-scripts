@@ -28,9 +28,9 @@
         state: present
       when: apply_aio_max | bool
 
-    # - name: Reload sysctl settings
-    #   command: sysctl -p
-    #   when: apply_aio_max | bool
+    - name: Reload sysctl settings
+      command: sysctl -p
+      when: apply_aio_max | bool
 
     - name: Copy script to remote
       copy:

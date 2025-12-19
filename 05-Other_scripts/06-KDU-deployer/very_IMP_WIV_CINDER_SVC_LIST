@@ -1,0 +1,49 @@
++--------------------------------------+----------------------------------------------+-----------------+
+| res_id                               | rolename                                     | current_state   |
++--------------------------------------+----------------------------------------------+-----------------+
+| 0f5eea15-bb64-495c-922a-10cfc0dab83d | service1          | applied         |
+| 0f5eea15-bb64-495c-922a-10cfc0dab83d | service2                    | auth-converging |
+| 0f5eea15-bb64-495c-922a-10cfc0dab83d | service3               | applied         |
+| 0f5eea15-bb64-495c-922a-10cfc0dab83d | service4     | applied         |
+| 0f5eea15-bb64-495c-922a-10cfc0dab83d | service5 | applied         |
+| 0f5eea15-bb64-495c-922a-10cfc0dab83d | service6       | applied         |
++--------------------------------------+----------------------------------------------+-----------------+
+
+
+Binary           Host                                 Zone             Status     State Updated At           RPC Version  Object Version  Cluster
+cinder-scheduler cinder-scheduler-77f4b858d8-z5f6v    nova             enabled    XXX   2025-08-14 05:44:26  3.12         1.39
+cinder-volume    8e899c21-0a6b-4fc9-a6ac-e866d84560df@hlotin001 nova             disabled   XXX   2025-06-25 14:51:57  3.18         1.39
+cinder-volume    8e899c21-0a6b-4fc9-a6ac-e866d84560df@hlotin002 nova             enabled    XXX   2025-06-25 14:51:59  3.18         1.39
+cinder-volume    8e899c21-0a6b-4fc9-a6ac-e866d84560df@hlotin003 nova             enabled    XXX   2025-06-25 14:52:00  3.18         1.39
+cinder-volume    b492f050-662c-4072-8d7a-3e41f9fa98e6@hlotin001 nova             disabled   XXX   2025-06-25 14:54:15  3.18         1.39
+cinder-volume    b492f050-662c-4072-8d7a-3e41f9fa98e6@hlotin002 nova             enabled    XXX   2025-06-25 14:54:15  3.18         1.39
+cinder-volume    b492f050-662c-4072-8d7a-3e41f9fa98e6@hlotin003 nova             enabled    XXX   2025-06-25 14:54:17  3.18         1.39
+cinder-volume    08513b19-6fdf-4fa2-bc28-76bcbd0088d1@hlotin001 nova             enabled    XXX   2025-06-25 23:19:22  3.18         1.39
+cinder-volume    4872b448-8b16-45f0-8e10-d51ef6a40e29@hlotin001 nova             enabled    :-)   2025-09-26 07:04:24  3.19         1.39
+cinder-volume    3d9a12f2-bcb5-4893-8c20-2faa89f668fc@hlotin002 nova             enabled    XXX   2025-06-25 23:47:20  3.18         1.39
+cinder-volume    6adbb911-fa1f-4bb4-920b-c5b9d59be72d@hlotin003 nova             enabled    XXX   2025-06-25 23:00:49  3.18         1.39
+cinder-volume    a1282bb6-b64b-48b5-8be9-b859ac85dba7@hlotin002 nova             enabled    XXX   2025-06-25 23:00:48  3.18         1.39
+cinder-volume    8d931d0d-afa1-4ac2-81b8-0759f3d3b43e@hlotin003 nova             enabled    :-)   2025-09-26 07:04:46  3.19         1.39
+cinder-volume    08513b19-6fdf-4fa2-bc28-76bcbd0088d1@hlotin002 nova             enabled    :-)   2025-09-26 07:04:54  3.19         1.39
+cinder-volume    3d9a12f2-bcb5-4893-8c20-2faa89f668fc@hlotin003 nova             enabled    XXX   2025-09-26 06:57:55  3.19         1.39
+cinder-volume    a1282bb6-b64b-48b5-8be9-b859ac85dba7@hlotin001 nova             enabled    :-)   2025-09-26 07:04:33  3.19         1.39
+cinder-volume    6adbb911-fa1f-4bb4-920b-c5b9d59be72d@hlotin002 nova             enabled    :-)   2025-09-26 07:04:33  3.19         1.39
+cinder-volume    3ea601a1-a376-4443-97b0-a2a738993608@hlotin004 nova             enabled    :-)   2025-09-26 07:04:46  3.19         1.39
+cinder-volume    3ea601a1-a376-4443-97b0-a2a738993608@hlotin005 nova             enabled    :-)   2025-09-26 07:04:49  3.19         1.39
+cinder-volume    3ea601a1-a376-4443-97b0-a2a738993608@hlotin006 nova             enabled    :-)   2025-09-26 07:04:40  3.19         1.39
+cinder-volume    485c38aa-71f4-4251-97d8-11ab4f61cd63@hlotin004 nova             enabled    :-)   2025-09-26 07:04:38  3.19         1.39
+cinder-volume    485c38aa-71f4-4251-97d8-11ab4f61cd63@hlotin005 nova             enabled    :-)   2025-09-26 07:04:41  3.19         1.39
+cinder-volume    485c38aa-71f4-4251-97d8-11ab4f61cd63@hlotin006 nova             enabled    :-)   2025-09-26 07:04:42  3.19         1.39
+cinder-volume    7e829338-1488-4003-a787-002db86046f0@hlotin007 nova             enabled    :-)   2025-09-26 07:05:15  3.19         1.39
+cinder-volume    95a6ed5a-1227-4b33-a93b-b93bec72c281@hlotin007 nova             enabled    :-)   2025-09-26 07:04:48  3.19         1.39
+cinder-scheduler cinder-scheduler-96d89b4d7-64s7r     nova             enabled    XXX   2025-08-14 09:01:09  3.12         1.39
+cinder-scheduler cinder-scheduler-66b978d998-tk85l    nova             enabled    :-)   2025-09-26 07:04:47  3.12         1.39
+cinder-volume    e12cf3c5-bb6a-449f-a5d1-f8ce4dc55ddc@hlohv009 nova             enabled    XXX   2025-09-16 18:09:21  3.19         1.39
+cinder-volume    31fecf96-6969-4417-a68c-cd071e2216ca@hlohv008 nova             disabled   XXX   2025-09-16 07:12:34  3.19         1.39
+cinder-volume    7f1049fb-52eb-45e4-973b-118c8dabb4b2@hlohv008 nova             disabled   XXX   2025-09-16 07:56:36  3.19         1.39
+cinder-volume    fea26588-fc75-47ba-96bb-24a2509162bd@hlotin009 nova             enabled    :-)   2025-09-26 07:04:12  3.19         1.39
+cinder-volume    e12cf3c5-bb6a-449f-a5d1-f8ce4dc55ddc@hlotin009 nova             enabled    XXX   2025-09-17 08:03:22  3.19         1.39
+cinder-volume    eb3f5257-764d-44a8-92b0-b2700fceeffd@hlotin009 nova             enabled    :-)   2025-09-26 07:04:26  3.19         1.39
+cinder-volume    0f5eea15-bb64-495c-922a-10cfc0dab83d@hlotin008 nova             disabled   XXX   2025-09-26 04:49:03  3.19         1.39
+cinder-volume    4546d80b-fa03-430f-b0a3-c82163879006@hlotin008 nova             disabled   XXX   2025-09-26 05:17:27  3.19         1.39
+cinder-volume    7f1049fb-52eb-45e4-973b-118c8dabb4b2@hlotin009 nova             disabled   :-)   2025-09-26 07:05:13  3.19         1.39
