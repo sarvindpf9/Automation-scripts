@@ -6,7 +6,7 @@ import requests
 import argparse
 
 # List of required environment variables
-required_vars = ['DOMAIN', 'BORK', 'EMAIL', 'BORK_TOKEN', 'SHORTNAME',
+required_vars = ['DOMAIN', 'BORK', 'EMAIL', 'BORK_TOKEN', 'SHORTNAME', 'TOKEN',
                  'AIM', 'PASSWORD', 'REGION', 'SPOT_ORGANIZATION_NAME', 'CHART_NAME']
 
 # Get env vars from deploy.env
@@ -25,26 +25,22 @@ parser.add_argument('--customer', '-c', required=False,
                     help='Name of the CUSTOMER')
 parser.add_argument('--get-kubeconfig', required=False,
                     help='set access and fetch kubeconfig of speecified cloud space', default='')
-
-# group = parser.add_mutually_exclusive_group(required=True)
-# group.add_argument('--infra', action='store_true', help='Use infra payload create/delete commands')
-# group.add_argument('--region', action='store_true', help='Use region payload and create/delete commands')
-
 parser.add_argument('--infra', action='store_true',
                     help='Use infra payload create/delete commands')
 parser.add_argument('--region', action='store_true',
                     help='Use region payload and create/delete commands')
-
-parser.add_argument('--delete', required=False,
+parser.add_argument('--delete', action='store_true',
                     help='Set to "yes" to run delete request', default='no')
-parser.add_argument('--create', required=False,
+parser.add_argument('--create', action='store_true',
                     help='Set to "yes" to run delete request', default='no')
 
 args = parser.parse_args()
 
 CUSTOMER = args.customer
-DO_DELETE = (args.delete.lower() == "y")
-DO_CREATE = (args.create.lower() == "y")
+# DO_DELETE = (args.delete.lower() == "y")
+# DO_CREATE = (args.create.lower() == "y")
+DO_DELETE = (args.delete)
+DO_CREATE = (args.create)
 USE_INFRA = args.infra
 USE_REGION = args.region
 GET_KUBECONFIG = args.get_kubeconfig
@@ -60,7 +56,8 @@ payload_region = {
     "options": {
         "multi_region": "true",
         "chart_url": f"https://ops-opex-pcd-dev-pcd-charts.s3.us-west-2.amazonaws.com/kdu/{env['CHART_NAME']}.tgz",
-        "parallel": "false"
+        "parallel": "true",
+        "skip_components": "terrakube"
     }
 }
 payload_infra = {
@@ -70,14 +67,14 @@ payload_infra = {
     "options": {
         "multi_region": "true",
         "chart_url": f"https://ops-opex-pcd-dev-pcd-charts.s3.us-west-2.amazonaws.com/kdu/{env['CHART_NAME']}.tgz",
-        "parallel": "false"
     }
 }
 payload_spot = {
     "organization_name": env["SPOT_ORGANIZATION_NAME"],
-    "cloudspace_name": f"{GET_KUBECONFIG}",
+    "cloudspace_name": env["AIM"],
     "refresh_token": env["BORK_TOKEN"]
 }
+print(payload_spot)
 
 # write payloads to files
 for filename, data in [(payload_region_file, payload_region), (payload_infra_file, payload_infra), ('spot-payload.json', payload_spot)]:
@@ -87,10 +84,14 @@ for filename, data in [(payload_region_file, payload_region), (payload_infra_fil
 bork_url = env["BORK"]
 domain = env["DOMAIN"]
 
+headers = {
+    'Content-Type': 'application/json',
+    'Authorization': f'Bearer {env["TOKEN"]}',
+}
+
 # Ready payload files
 with open(payload_infra_file, 'rb') as f:
     deploy_data_infra = f.read()
-headers = {'Content-Type': 'application/json'}
 with open(payload_region_file, 'rb') as f:
     deploy_data_region = f.read()
 with open('spot-payload.json', 'rb') as f:
@@ -102,6 +103,7 @@ if GET_KUBECONFIG:
     spot_url = "https://spot.rackspace.com/apis/auth.ngpc.rxt.io/v1/generate-kubeconfig"
     response_deploy = requests.post(
         spot_url, json=payload_spot, headers=headers)
+    print(response_deploy)
     print(f"Return status: {response_deploy.status_code}")
     if response_deploy.status_code == 200:
         # Extract kubeconfig text from the data section
@@ -110,11 +112,15 @@ if GET_KUBECONFIG:
         # Save as text
         with open(f'kubeconfig-{GET_KUBECONFIG}', 'w') as f:
             f.write(kubeconfig_content)
-        print(f"Kubeconfig saved to kubeconfig-{GET_KUBECONFIG}")
+        print(f"Kubeconfig saved to kubeconfig-{env['AIM']}")
 
 if DO_DELETE:
     # print(USE_INFRA)
     if USE_INFRA:
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {env["TOKEN"]}',
+        }
         infra_url = f"https://{bork_url}/api/v1/regions/{CUSTOMER}.{domain}"
         customer_url = f"https://{bork_url}/api/v1/customers/{CUSTOMER}.{domain}"
         email_url = f"https://{bork_url}/api/v1/customers/{CUSTOMER}"
@@ -123,17 +129,19 @@ if DO_DELETE:
 
         print('Deleting infra region:', infra_url)
         # response_infra = requests.request('BURN', infra_url, data=deploy_data_infra, headers=headers)
-        response_infra = requests.request('BURN', infra_url)
+        response_infra = requests.request('BURN', infra_url, headers=headers)
         print('Delete infra region response:',
               response_infra.status_code, response_infra.text)
 
-        # print('Deleting infra customer entry:', customer_url)
-        # response_customer_infra = requests.request('DELETE', customer_url, headers=headers, json=payload)
-        # print('Delete infra customer response:',response_customer_infra.status_code, response_customer_infra.text)
+        print('Deleting infra customer entry:', customer_url)
+        response_customer_infra = requests.request(
+            'DELETE', customer_url, headers=headers, json=payload)
+        print('Delete infra customer response:',
+              response_customer_infra.status_code, response_customer_infra.text)
 
         print('Removing customer email:', customer_email)
         response_email = requests.request(
-            'DELETE', email_url, json=customer_email)
+            'DELETE', email_url, json=customer_email, headers=headers)
         print('Remove customer response response:',
               response_email.status_code, response_email.text)
 
@@ -151,24 +159,32 @@ if DO_DELETE:
             'DELETE', customer_url_region, headers=headers)
         # print('Delete region customer response:', response_customer_region.status_code, response_customer_region.text)
 
-
-if DO_CREATE:
-    print(USE_INFRA)
+elif DO_CREATE:
+    # print(USE_INFRA)
     if USE_INFRA:
+
         url_email = f"https://{bork_url}/api/v1/customers/{CUSTOMER}"
         response_email = requests.post(
-            url_email, json={"admin_email": env['EMAIL']})
+            url_email,
+            json={"admin_email": env['EMAIL']},
+            headers=headers,
+        )
         print('Customer Email:', response_email.status_code, response_email.text)
 
         url_deploy = f"https://{bork_url}/api/v1/regions/{CUSTOMER}.{domain}"
         print('Creating infra customer entity:', url_deploy)
         payload = {"customer": CUSTOMER}
-        response_deploy = requests.post(url_deploy, json=payload)
+        response_deploy = requests.post(
+            url_deploy, json=payload, headers=headers)
         # print('Create infra customer response:', response_deploy.status_code, response_deploy.text)
 
         print('Creating infra region...')
         response_deploy = requests.request(
-            'DEPLOY', url_deploy, data=deploy_data_infra, headers=headers)
+            'DEPLOY',
+            url_deploy,
+            data=deploy_data_infra,
+            headers=headers,
+        )
         print('Deploy infra region response:',
               response_deploy.status_code, response_deploy.text)
 
