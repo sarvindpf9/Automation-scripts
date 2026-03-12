@@ -2,20 +2,22 @@
 
 set -euo pipefail
 
-RUN_VIRSH=0
 VIRSH_UUID=""
 ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --virsh) RUN_VIRSH=1 ;;
+        --virsh) ;;  # kept for backwards compat; --uuid implies virsh
         --uuid)  shift; VIRSH_UUID="$1" ;;
         *)       ARGS+=("$1") ;;
     esac
     shift
 done
 
-if [[ ${#ARGS[@]} -eq 0 ]]; then
-    echo "Usage: $0 [--virsh [--uuid <vm-uuid>]] <ip-to-check-in-etc-hosts> [ip2] [ip3]..."
+if [[ ${#ARGS[@]} -eq 0 && -z "$VIRSH_UUID" ]]; then
+    echo "Usage: $0 [--uuid <vm-uuid>] [<ip-to-check-in-etc-hosts> [ip2] ...]"
+    echo "  --uuid <uuid>   check virsh VM disk/multipath only"
+    echo "  <ip> ...        run all host checks (bond, ntp, packages, etc.)"
+    echo "  Both together   run all checks including virsh"
     exit 1
 fi
 
@@ -365,17 +367,20 @@ check_virsh_vms() {
 }
 
 
-#health_check "1.  PASSWORDLESS SUDO"  check_sudoers
-health_check "1.  CHECK BOND MODE"    check_bond
-health_check "2.  NTP"                check_ntp
-health_check "3.  PACKAGES"           check_packages
-health_check "4.  SERVICES"           check_services
-health_check "5.  ISCSI INITIATOR"    check_iscsi_initiator
-health_check "6.  MULTIPATH BLACKLIST" check_multipath_blacklist
-health_check "7.  LVM FILTERS"        check_lvm_filters
-health_check "8.  /ETC/HOSTS"         check_hosts
-health_check "9.  PF9 SERVICES"       check_pf9_services
-health_check "10. OVS BRIDGES"        check_ovs_bridges
-if ((RUN_VIRSH)); then
-    health_check "11. VIRSH VMS"      check_virsh_vms "$VIRSH_UUID"
+if [[ ${#CHECK_IP[@]} -gt 0 ]]; then
+    #health_check "1.  PASSWORDLESS SUDO"  check_sudoers
+    health_check "1.  CHECK BOND MODE"    check_bond
+    health_check "2.  NTP"                check_ntp
+    health_check "3.  PACKAGES"           check_packages
+    health_check "4.  SERVICES"           check_services
+    health_check "5.  ISCSI INITIATOR"    check_iscsi_initiator
+    health_check "6.  MULTIPATH BLACKLIST" check_multipath_blacklist
+    health_check "7.  LVM FILTERS"        check_lvm_filters
+    health_check "8.  /ETC/HOSTS"         check_hosts
+    health_check "9.  PF9 SERVICES"       check_pf9_services
+    health_check "10. OVS BRIDGES"        check_ovs_bridges
+fi
+
+if [[ -n "$VIRSH_UUID" ]]; then
+    health_check "11. VIRSH VMS"          check_virsh_vms "$VIRSH_UUID"
 fi
