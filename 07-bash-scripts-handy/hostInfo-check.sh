@@ -3,17 +3,19 @@
 set -euo pipefail
 
 RUN_VIRSH=0
+VIRSH_UUID=""
 ARGS=()
-for arg in "$@"; do
-    if [[ "$arg" == "--virsh" ]]; then
-        RUN_VIRSH=1
-    else
-        ARGS+=("$arg")
-    fi
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --virsh) RUN_VIRSH=1 ;;
+        --uuid)  shift; VIRSH_UUID="$1" ;;
+        *)       ARGS+=("$1") ;;
+    esac
+    shift
 done
 
 if [[ ${#ARGS[@]} -eq 0 ]]; then
-    echo "Usage: $0 [--virsh] <ip-to-check-in-etc-hosts> [ip2] [ip3]..."
+    echo "Usage: $0 [--virsh [--uuid <vm-uuid>]] <ip-to-check-in-etc-hosts> [ip2] [ip3]..."
     exit 1
 fi
 
@@ -36,7 +38,7 @@ INFO() { printf "  ${DIM}         ${NC}  %s\n" "$*"; }
 health_check() {
     local section="$1"
     shift
-    printf "\n${CYAN}${BOLD}━━━  %-40s━━━${NC}\n" "$section "
+    printf "\n${CYAN}${BOLD}━━━  %-10s━━━${NC}\n" "$section "
     "$@" || true
 }
 
@@ -78,21 +80,25 @@ check_sudoers() {
 }
 
 check_bond() {
-    local BOND_IFACE
-    BOND_IFACE=$(ip -d link show type bond 2>/dev/null | grep -o 'bond[0-9]*' | head -1 || true)
-    if [[ -n "$BOND_IFACE" && -r "/proc/net/bonding/$BOND_IFACE" ]]; then
-        local BOND_MODE
-        BOND_MODE=$(grep "^Bonding Mode:" "/proc/net/bonding/$BOND_IFACE" 2>/dev/null | awk '{print $4}' || true)
-        if [[ "$BOND_MODE" == "802.3ad" ]]; then
-            local BOND_IP
-            BOND_IP=$(ip -4 addr show dev "$BOND_IFACE" scope global 2>/dev/null | awk '/inet / {print $2}' || true)
-            OK "Mode4 (802.3ad): $BOND_IFACE  IP: $BOND_IP"
-            return
-        fi
-        WARN "$BOND_IFACE is active but mode is '$BOND_MODE' (expected 802.3ad)"
-    else
-        FAIL "No bond interface in mode 4 found"
+    local bond_ifaces
+    mapfile -t bond_ifaces < <(ip -o link show type bond 2>/dev/null | awk -F': ' '{print $2}' || true)
+
+    if [[ ${#bond_ifaces[@]} -eq 0 ]]; then
+        FAIL "No bond interfaces found"
+        return
     fi
+
+    for BOND_IFACE in "${bond_ifaces[@]}"; do
+        local BOND_MODE BOND_IP
+        BOND_MODE=$(awk -F': ' '/^Bonding Mode:/{print $2}' "/proc/net/bonding/$BOND_IFACE" 2>/dev/null || true)
+        BOND_IP=$(ip -4 addr show dev "$BOND_IFACE" scope global 2>/dev/null | awk '/inet / {print $2}' || true)
+
+        if [[ "$BOND_MODE" == *"802.3ad"* ]]; then
+            OK "$BOND_IFACE  mode: $BOND_MODE  IP: ${BOND_IP:-none}"
+        else
+            WARN "$BOND_IFACE  mode: ${BOND_MODE:-unknown}  IP: ${BOND_IP:-none}  (expected 802.3ad)"
+        fi
+    done
 }
 
 check_ntp() {
@@ -112,15 +118,13 @@ check_ntp() {
 
 check_packages() {
     local PACKAGES="lsscsi sg3-utils multipath-tools scsitools open-iscsi nfs-common"
-    local MISSING=()
     for pkg in $PACKAGES; do
-        dpkg -l "$pkg" 2>/dev/null | grep -q "^ii" || MISSING+=("$pkg")
+        if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
+            OK "$pkg"
+        else
+            FAIL "$pkg  (not installed)"
+        fi
     done
-    if [[ ${#MISSING[@]} -eq 0 ]]; then
-        OK "All required packages installed"
-    else
-        FAIL "Missing packages: ${MISSING[*]}"
-    fi
 }
 
 check_services() {
@@ -166,10 +170,12 @@ check_iscsi_initiator() {
 check_multipath_blacklist() {
     if [[ -r /etc/multipath.conf ]]; then
         local BLACKLIST
-        BLACKLIST=$(awk '/^\[blacklist\]/,/^\[/ {if (/^(devnode|wwid|device)/) print}' /etc/multipath.conf 2>/dev/null)
+        BLACKLIST=$(awk '/^[[:space:]]*blacklist[[:space:]]*\{/,/^[[:space:]]*\}/ {if (/devnode|wwid|device/) print}' /etc/multipath.conf 2>/dev/null)
         if [[ -n "$BLACKLIST" ]]; then
             OK "Blacklist entries found:"
-            INFO "$BLACKLIST"
+            while IFS= read -r line; do
+                INFO "  $line"
+            done <<< "$BLACKLIST"
         else
             WARN "No blacklist entries in multipath.conf"
         fi
@@ -253,7 +259,7 @@ check_ovs_bridges() {
         if [[ "$br" == "br-int" ]]; then
             if [[ -n "$ports" ]]; then
                 INFO "Ports: listing all ports on br-int (including virtual):"
-                echo "$ports"
+                while IFS= read -r port; do printf '             %s\n' "$port"; done <<< "$ports"
             else
                 INFO "Ports: none"
             fi
@@ -303,58 +309,61 @@ find_multipath_for_device() {
 }
 
 check_virsh_vms() {
+    local uuid="$1"
+
     if ! command -v virsh >/dev/null 2>&1; then
         FAIL "virsh not installed"
         return
     fi
 
-    local vms
-    vms=$(virsh list --name --state-running 2>/dev/null || true)
-    if [[ -z "$vms" ]]; then
-        WARN "No running VMs"
+    local vm
+    if [[ -n "$uuid" ]]; then
+        vm=$(virsh domname "$uuid" 2>/dev/null || true)
+        if [[ -z "$vm" ]]; then
+            FAIL "No VM found with UUID: $uuid"
+            return
+        fi
+    else
+        FAIL "No UUID provided — use --uuid <vm-uuid>"
         return
     fi
 
-    while read -r vm; do
-        [[ -z "$vm" ]] && continue
-        OK "VM: $vm"
+    OK "VM: $vm  (UUID: $uuid)"
 
-        local domblk
-        domblk=$(virsh domblklist --details "$vm" 2>/dev/null || true)
+    local domblk
+    domblk=$(virsh domblklist --details "$vm" 2>/dev/null || true)
 
-        if [[ -z "$domblk" ]]; then
-            WARN "No block devices found for $vm"
-            continue
+    if [[ -z "$domblk" ]]; then
+        WARN "No block devices found for $vm"
+        return
+    fi
+
+    INFO "Block device list:"
+    while IFS= read -r line; do
+        INFO "  $line"
+    done <<< "$domblk"
+
+    local dms=()
+    mapfile -t dms < <(awk '{print $4}' <<< "$domblk" | grep -oE 'dm-[0-9]+' | sort -u)
+
+    if ((${#dms[@]} == 0)); then
+        WARN "No dm-* devices found for $vm"
+        return
+    fi
+
+    INFO "Multipath mapping:"
+    for dm in "${dms[@]}"; do
+        local mpath_line mpath_name
+        mpath_line=$(multipath -ll 2>/dev/null | grep -E "\\b${dm}\\b" | head -1 || true)
+        if [[ -n "$mpath_line" ]]; then
+            mpath_name=$(awk '{print $1}' <<< "$mpath_line")
+            INFO "  $dm  ->  $mpath_name  (/dev/mapper/$mpath_name)"
+        else
+            WARN "  $dm  ->  not found in multipath"
         fi
-
-        INFO "Block device list:"
-        while IFS= read -r line; do
-            INFO "  $line"
-        done <<< "$domblk"
-
-        local dms=()
-        mapfile -t dms < <(awk '{print $4}' <<< "$domblk" | grep -oE 'dm-[0-9]+' | sort -u)
-
-        if ((${#dms[@]} == 0)); then
-            WARN "No dm-* devices found for $vm"
-            continue
-        fi
-
-        INFO "Multipath mapping:"
-        for dm in "${dms[@]}"; do
-            local mpath_line mpath_name
-            mpath_line=$(multipath -ll 2>/dev/null | grep -E "\\b${dm}\\b" | head -1 || true)
-            if [[ -n "$mpath_line" ]]; then
-                mpath_name=$(awk '{print $1}' <<< "$mpath_line")
-                INFO "  $dm  ->  $mpath_name  (/dev/mapper/$mpath_name)"
-            else
-                WARN "  $dm  ->  not found in multipath"
-            fi
-        done
-    done <<< "$vms"
+    done
 }
 
-# ── Run all checks ─────────────────────────────────────────────────────────────
 
 #health_check "1.  PASSWORDLESS SUDO"  check_sudoers
 health_check "1.  CHECK BOND MODE"    check_bond
@@ -367,6 +376,6 @@ health_check "7.  LVM FILTERS"        check_lvm_filters
 health_check "8.  /ETC/HOSTS"         check_hosts
 health_check "9.  PF9 SERVICES"       check_pf9_services
 health_check "10. OVS BRIDGES"        check_ovs_bridges
-#if ((RUN_VIRSH)); then
-#    health_check "11. VIRSH VMS"      check_virsh_vms
-#fi
+if ((RUN_VIRSH)); then
+    health_check "11. VIRSH VMS"      check_virsh_vms "$VIRSH_UUID"
+fi
