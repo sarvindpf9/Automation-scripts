@@ -38,7 +38,7 @@ Python scripts for OpenStack instance lifecycle management.
 
 Miscellaneous automation covering MAAS, OpenStack, PCD, and KDU operations.
 
-| Directory | Purpose |
+| Directory / Script | Purpose |
 | --- | --- |
 | `01-Maas_add_baremetal` | Add baremetal nodes to MAAS |
 | `02-Maas_full_automation` | Full MAAS environment automation |
@@ -52,6 +52,7 @@ Miscellaneous automation covering MAAS, OpenStack, PCD, and KDU operations.
 | `11-get-VM-port-stat-general` | VM port statistics |
 | `12-pcd-setup-local` | Local PCD environment setup |
 | `13-passwordless_user-create` | Passwordless sudo user provisioning |
+| `014-delete-vjb-flavors.py` | Delete VJB flavors from OpenStack |
 
 ### [06-packer](06-packer/)
 
@@ -68,6 +69,8 @@ Handy Bash scripts for host-level diagnostics and health checks.
 | `hostInfo-check.sh` | Host health checker — bond, NTP, packages, iSCSI, multipath, OVS, PF9 services, virsh VM disk/multipath |
 | `ubuntu24-precheck-script.sh` | Pre-flight checks for Ubuntu 24 hosts |
 | `check_orphaned-vol.sh` | Detect orphaned Cinder volumes |
+| `01-NTT/vm-multipath-check.sh` | Check multipath mapping for all running VMs |
+| `01-NTT/vm-mpath-check-uuid.sh` | Check multipath mapping for a specific VM by UUID |
 
 #### hostInfo-check.sh usage
 
