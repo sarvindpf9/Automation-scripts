@@ -1,6 +1,7 @@
+#!/bin/bash
+
 ## This script check the volume attachement list to verify if a volume is orphaned and prints the list
 
-#!/bin/bash
 
 echo "Checking for orphaned volumes..."
 

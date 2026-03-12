@@ -1,0 +1,9 @@
+[Unit]
+Description=Trigger firstboot-reset when marker exists
+
+[Path]
+PathExists=/var/lib/firstboot/run
+Unit=firstboot-reset.service
+
+[Install]
+WantedBy=multi-user.target

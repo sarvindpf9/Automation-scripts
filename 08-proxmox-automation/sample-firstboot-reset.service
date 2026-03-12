@@ -1,0 +1,13 @@
+[Unit]
+Description=First-boot one-time reset (network down + machine-id)
+DefaultDependencies=yes
+Before=NetworkManager.service systemd-networkd.service
+ConditionPathExists=/var/lib/firstboot/run
+
+[Service]
+Type=oneshot
+ExecStart=/opt/scripts/oneshot-uuid_reapply.sh
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
