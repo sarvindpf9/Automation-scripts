@@ -1,45 +1,93 @@
-### Howto Use this script?
+# Automation Scripts
 
-#### 02-deploy-instance_E2E
-This sample can do following things:
-- Deploy independent images to glance based on user inputs and uses that to deploy the actual instance  
-- Deploy networks and subnet and attach to instance
-- Deploy single nova instance
-- Deploy independent cinder volume and attach to the instance
-- The cinder and image can be individually  excluded/included with apply command.
+A collection of scripts and automation tooling for day-to-day infrastructure operations, covering Terraform, Ansible, Python, Packer, and Bash utilities.
 
-Steps to execute:
-- Ensure `opentofu` packages are installed on the host and the host has access to the PCD environment. 
-- Ensure latest python3-openstackclient and python3-octaviaclient packages are installed:
-```bash
-sudo apt-get install python3-openstackclient python3-octaviaclient -y
-```
-- Download the required directory locally host.
-- From inside the directory, run:
-```bash
-tofu init
-```
-- Configure the `testdeploy.tfvars` file to have the necessary openstack auth configuration along with image and  glance config:
-```bash
-openstack_user_name = "<User-name>"
-openstack_tenant_name = "<tenant_name>"
-openstack_password = "<password>"
-openstack_auth_url = "https://portal_url/keystone/v3"
-openstack_region = "<region_name>"
-image_name = "<name_of_the_image_available>"
-flavor_name = "<flavor_name_available>"
-glance_image_name = "<name_of_the_image_to_be_uploaded>"
+> **Note:** Scripts in this repo are actively maintained and subject to frequent changes. Test before use in production.
 
-```
-- Copy the required glance image inside this directory.
-- Run plan and apply command with tofu. To include volume and image deployment:
+---
+
+## Repository Structure
+
+### [01-terraform-labs](01-terraform-labs/)
+
+Terraform/OpenTofu lab configurations for deploying workloads on OpenStack/PCD environments.
+
+- `01-deploy_bulk-workload` — bulk instance deployment
+- `02-deploy-instance_E2E` — end-to-end single instance deployment (image, network, volume)
+
+### [02-Ansible-scripts](02-Ansible-scripts/)
+
+Ansible playbooks and automation for infrastructure configuration tasks.
+
+- `README.md` — usage instructions
+
+### [02-deploy-instance_E2E](02-deploy-instance_E2E/)
+
+Standalone OpenTofu configuration for deploying a single Nova instance end-to-end including optional Glance image upload and Cinder volume attachment.
+
+See the main README section below for full usage details.
+
+### [03-python_deployment_automation](03-python_deployment_automation/)
+
+Python scripts for OpenStack instance lifecycle management.
+
+- `create_instance_e2e.py` — end-to-end instance creation via OpenStack SDK
+- `modules/` — reusable helper modules
+
+### [05-Other_scripts](05-Other_scripts/)
+
+Miscellaneous automation covering MAAS, OpenStack, PCD, and KDU operations.
+
+| Directory | Purpose |
+| --- | --- |
+| `01-Maas_add_baremetal` | Add baremetal nodes to MAAS |
+| `02-Maas_full_automation` | Full MAAS environment automation |
+| `03-pcdExpress_latest` | PCD Express deployment scripts |
+| `04-openstack-samples` | OpenStack API/SDK sample scripts |
+| `06-KDU-deployer` | KDU deployment automation |
+| `07-ansible_plays` | Supplementary Ansible plays |
+| `08-Interface_cleanup_script` | Network interface cleanup |
+| `09-maas_install_script-updated` | MAAS installation automation |
+| `10-run-port-group-script` | Port group configuration |
+| `11-get-VM-port-stat-general` | VM port statistics |
+| `12-pcd-setup-local` | Local PCD environment setup |
+| `13-passwordless_user-create` | Passwordless sudo user provisioning |
+
+### [06-packer](06-packer/)
+
+Packer templates for building machine images.
+
+- `01-windows-image_builder_working` — Windows image build pipeline with drivers
+
+### [07-bash-scripts-handy](07-bash-scripts-handy/)
+
+Handy Bash scripts for host-level diagnostics and health checks.
+
+| Script | Purpose |
+| --- | --- |
+| `hostInfo-check.sh` | Host health checker — bond, NTP, packages, iSCSI, multipath, OVS, PF9 services, virsh VM disk/multipath |
+| `ubuntu24-precheck-script.sh` | Pre-flight checks for Ubuntu 24 hosts |
+| `check_orphaned-vol.sh` | Detect orphaned Cinder volumes |
+
+#### hostInfo-check.sh usage
+
 ```bash
-tofu  plan  -var-file testdeploy.tfvars -var="deploy_image=true" -var="deploy_volume=true"
-tofu  apply  -var-file testdeploy.tfvars -var="deploy_image=true" -var="deploy_volume=true" 
+# Run all host checks
+./hostInfo-check.sh <ip> [ip2 ...]
+
+# Check a specific VM's disk and multipath mapping
+./hostInfo-check.sh --uuid <vm-uuid>
+
+# Run all checks including virsh VM
+./hostInfo-check.sh --uuid <vm-uuid> <ip> [ip2 ...]
 ```
-Type `yes` for the apply action. 
-- To deploy without image or volume creation test:
-```bash
-tofu  plan  -var-file testdeploy.tfvars 
-tofu  apply  -var-file testdeploy.tfvars 
-```
+
+---
+
+## Requirements
+
+- **Terraform/OpenTofu** — for `01-terraform-labs` and `02-deploy-instance_E2E`
+- **Python 3** + `python3-openstackclient` — for Python scripts
+- **Ansible** — for playbooks in `02-Ansible-scripts` and `05-Other_scripts/07-ansible_plays`
+- **Packer** — for `06-packer`
+- Standard Linux tools (`ovs-vsctl`, `multipath`, `iscsiadm`, `virsh`) for `07-bash-scripts-handy`
