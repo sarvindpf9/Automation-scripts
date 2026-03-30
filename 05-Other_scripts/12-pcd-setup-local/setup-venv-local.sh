@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Install pip package
+sudo apt install python3.12-venv
+
 # Setup only virtualenv.. nothing else
 VENV_DIR=".venv-local"  # Name/location of your virtualenv
 
