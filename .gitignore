@@ -1,3 +1,14 @@
 # macOS
 .DS_Store
 **/.DS_Store
+
+# Terraform
+.terraform/
+**/.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+
+# Python virtualenv
+.venv/
+**/.venv/
