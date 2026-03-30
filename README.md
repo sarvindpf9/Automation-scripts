@@ -54,6 +54,16 @@ Miscellaneous automation covering MAAS, OpenStack, PCD, and KDU operations.
 | `13-passwordless_user-create` | Passwordless sudo user provisioning |
 | `014-delete-vjb-flavors.py` | Delete VJB flavors from OpenStack |
 
+### [08-proxmox-automation](08-proxmox-automation/)
+
+Proxmox hypervisor automation utilities.
+
+| Script | Purpose |
+| --- | --- |
+| `oneshot-uuid_reapply.sh` | Resets machine-id, DBus ID, and stale network config on cloned VMs — runs as a one-shot systemd service on first boot |
+| `sample-firstboot-reset.service` | Systemd service unit definition for the machine ID reset |
+| `sample-firstboot-reset.path` | Systemd path unit that triggers the reset on marker file presence |
+
 ### [06-packer](06-packer/)
 
 Packer templates for building machine images.
@@ -71,6 +81,8 @@ Handy Bash scripts for host-level diagnostics and health checks.
 | `check_orphaned-vol.sh` | Detect orphaned Cinder volumes |
 | `01-NTT/vm-multipath-check.sh` | Check multipath mapping for all running VMs |
 | `01-NTT/vm-mpath-check-uuid.sh` | Check multipath mapping for a specific VM by UUID |
+| `02-Siemens/kvm-tuning-check-v1.sh` | Comprehensive KVM/Nova compute tuning audit — kernel variant, CPU isolation, NUMA, IRQ affinity, THP, governor, sysctl, KVM module params |
+| `02-Siemens/kvm-tuning-check-v2.sh` | Quick KVM tuning checker — validates GRUB cmdline, CPU governor, energy perf, thermal daemons, I/O scheduler, huge pages, and network tuning across 9 categories |
 
 #### hostInfo-check.sh usage
 
@@ -94,3 +106,4 @@ Handy Bash scripts for host-level diagnostics and health checks.
 - **Ansible** — for playbooks in `02-Ansible-scripts` and `05-Other_scripts/07-ansible_plays`
 - **Packer** — for `06-packer`
 - Standard Linux tools (`ovs-vsctl`, `multipath`, `iscsiadm`, `virsh`) for `07-bash-scripts-handy`
+- **systemd** — for `08-proxmox-automation` service units
