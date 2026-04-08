@@ -14,7 +14,7 @@ The primary script. Handles both attach and detach in a single entry point.
 
 **What it does:**
 
-1. Resolves the Nova instance UUID and name from the VM IP via `openstack server list`
+1. Resolves the Nova instance UUID and name from the VM IP via `openstack server list` (scoped to the specified tenant via `OS_PROJECT_NAME`)
 2. Resolves the hypervisor hostname and management IP via `openstack server show` + `openstack hypervisor list`
 3. Runs pre-checks: VM state, hypervisor ICMP/SSH reachability, Glance image status (attach only)
 4. Resolves the libvirt domain name on the hypervisor by matching `virsh domuuid` against the Nova instance UUID
@@ -28,6 +28,7 @@ The primary script. Handles both attach and detach in a single entry point.
   --action attach \
   --vm-ip <VM_IP> \
   --user <SSH_USER> \
+  --tenant <TENANT_NAME> \
   --image-uuid <GLANCE_IMAGE_UUID>
 
 # Attach two ISOs (e.g. OS installer + driver disk)
@@ -35,6 +36,7 @@ The primary script. Handles both attach and detach in a single entry point.
   --action attach \
   --vm-ip <VM_IP> \
   --user <SSH_USER> \
+  --tenant <TENANT_NAME> \
   --image-uuid  <GLANCE_IMAGE_UUID_1> \
   --image-uuid2 <GLANCE_IMAGE_UUID_2>
 
@@ -42,13 +44,15 @@ The primary script. Handles both attach and detach in a single entry point.
 ./cd-attachment.sh \
   --action detach \
   --vm-ip <VM_IP> \
-  --user <SSH_USER>
+  --user <SSH_USER> \
+  --tenant <TENANT_NAME>
 
 # Detach a specific CDROM device only
 ./cd-attachment.sh \
   --action detach \
   --vm-ip <VM_IP> \
   --user <SSH_USER> \
+  --tenant <TENANT_NAME> \
   --device <DEV>
 ```
 
@@ -60,9 +64,12 @@ The primary script. Handles both attach and detach in a single entry point.
 | `--vm-ip IP` | One of these | IP address of the target VM |
 | `--vm-name NAME` | One of these | Nova instance name of the target VM |
 | `--user USER` | Yes | SSH username for the hypervisor |
+| `--tenant NAME` | Yes | OpenStack project name; scopes the `server list --ip` lookup via `OS_PROJECT_NAME` |
 | `--image-uuid UUID` | attach only | Glance image UUID for the first ISO |
 | `--image-uuid2 UUID` | No | Glance image UUID for a second ISO (attach only, max 2 total) |
 | `--device DEV` | No | Device name to selectively detach (e.g. `sdm`); detach only. Omit to detach all CDROMs. |
+| `--nfs-mount PATH` | No | Override the NFS Glance mount path on the hypervisor (default: `/var/opt/imagelibrary/data/glance`). |
+| `--virsh-as-root` | No | Run `virsh attach-disk` via `sudo su -` (full root login shell). Use when plain `sudo virsh` lacks the required environment on the hypervisor. Also applies to the NFS file accessibility check prior to attach. |
 | `--help` | No | Show usage and exit |
 
 ### Examples
@@ -73,6 +80,7 @@ The primary script. Handles both attach and detach in a single entry point.
   --action attach \
   --vm-ip 10.0.1.50 \
   --user ubuntu \
+  --tenant <TENANT_NAME> \
   --image-uuid e1a2b3c4-0000-0000-0000-win2022iso
 
 # Attach OS ISO + VirtIO driver ISO simultaneously (by instance name)
@@ -80,6 +88,7 @@ The primary script. Handles both attach and detach in a single entry point.
   --action attach \
   --vm-name win2022-prod-01 \
   --user ubuntu \
+  --tenant <TENANT_NAME> \
   --image-uuid  e1a2b3c4-0000-0000-0000-win2022iso \
   --image-uuid2 f5d6e7f8-0000-0000-0000-virtiodrivers
 
@@ -87,14 +96,25 @@ The primary script. Handles both attach and detach in a single entry point.
 ./cd-attachment.sh \
   --action detach \
   --vm-ip 10.0.1.50 \
-  --user ubuntu
+  --user ubuntu \
+  --tenant <TENANT_NAME>
 
 # Detach only the second CDROM (e.g. driver disk on sdn)
 ./cd-attachment.sh \
   --action detach \
   --vm-ip 10.0.1.50 \
   --user ubuntu \
+  --tenant <TENANT_NAME> \
   --device sdn
+
+# Attach using a full root login shell for virsh (when sudo alone is insufficient)
+./cd-attachment.sh \
+  --action attach \
+  --vm-ip 10.0.1.50 \
+  --user ubuntu \
+  --tenant <TENANT_NAME> \
+  --image-uuid e1a2b3c4-0000-0000-0000-win2022iso \
+  --virsh-as-root
 ```
 
 ### CDROM device assignment
@@ -114,6 +134,56 @@ All pre-checks run before any `virsh` command is issued. Failure in any check ab
 | Hypervisor reachable via SSH | attach + detach |
 | Glance image exists and is `active` | attach only |
 
+### CDROM hotplug compatibility: machine type requirements
+
+`virsh attach-disk --live` requires a pre-existing CDROM slot in the VM's domain XML. Whether that slot can exist at all depends on the VM's emulated machine type.
+
+#### i440fx (pc) — default for most existing VMs
+
+The CDROM is emulated as an IDE device. IDE controllers in QEMU have **no hotplug support** — all slots must be defined at VM creation time. If the VM was provisioned without a CDROM device in its XML, live attach will fail with:
+
+```text
+error: Operation not supported: cdrom/floppy device hotplug isn't supported
+```
+
+To ensure a CDROM slot is present from provisioning, set the following property on the Glance image before booting the VM:
+
+```bash
+openstack image set <IMAGE_UUID> --property hw_cdrom_bus=ide
+```
+
+This causes Nova to include an empty IDE CDROM device in the domain XML at boot, giving libvirt a slot to target at hotplug time. Without it, the only option is cold attach (`--config` without `--live`, requiring a reboot).
+
+Verify a slot exists on a running VM before attempting attach:
+
+```bash
+sudo virsh dumpxml <DOMAIN> | grep -A5 "device='cdrom'"
+```
+
+#### q35 — recommended for new VM deployments
+
+q35 uses a PCIe bus with an ICH9 chipset. The CDROM is backed by a SATA controller (`ich9-ahci`), which **does support hotplug** at the controller level. This removes the architectural blocker present on i440fx.
+
+Set the following properties on the Glance image to provision a q35 VM with a SATA CDROM slot:
+
+```bash
+openstack image set <IMAGE_UUID> \
+  --property hw_machine_type=q35 \
+  --property hw_cdrom_bus=sata
+```
+
+The `hw_cdrom_bus=sata` property ensures the CDROM device is attached to the ICH9 SATA controller rather than falling back to IDE. Without it, Nova may still place the CDROM on an IDE bus even on q35, which reintroduces the hotplug limitation.
+
+Alternatively, set these on a flavor to apply across all VMs using it:
+
+```bash
+openstack flavor set <FLAVOR> \
+  --property hw:machine_type=q35 \
+  --property hw:cdrom_bus=sata
+```
+
+> **Note:** Machine type is baked in at VM creation. Existing i440fx VMs cannot be converted to q35 in-place — a rebuild is required. For existing VMs without a CDROM slot, cold attach remains the only viable option.
+
 ---
 
 ## `attach-cdrom.sh` / `detach-cdrom.sh`
@@ -129,5 +199,5 @@ Simpler, standalone wrappers for individual attach and detach operations. Refer 
 | Run from | Jump host / workstation with OpenStack credentials sourced |
 | SSH access | Key-based, `BatchMode=yes` — interactive password auth is not supported |
 | Hypervisor user | Must have permission to run `virsh` commands (typically `root` or a user in the `libvirt` group) |
-| NFS Glance mount | Must be mounted on the hypervisor at `/var/opt/imagelibrary/data/glance` (override `NFS_GLANCE_MOUNT` in script if different) |
+| NFS Glance mount | Must be mounted on the hypervisor at `/var/opt/imagelibrary/data/glance` (override at runtime with `--nfs-mount <PATH>`) |
 | OpenStack role | Needs `admin` or `reader` on the project to read `OS-EXT-SRV-ATTR:hypervisor_hostname` from `server show` |

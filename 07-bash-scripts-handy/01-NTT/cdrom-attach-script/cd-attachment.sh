@@ -26,18 +26,23 @@ SSH_OPTS=(-o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=10)
 usage() {
   cat >&2 <<EOF
 Usage:
-  $(basename "$0") --action attach { --vm-ip <IP> | --vm-name <NAME> } --user <SSH_USER> \\
-                    --image-uuid <UUID> [--image-uuid2 <UUID>]
-  $(basename "$0") --action detach { --vm-ip <IP> | --vm-name <NAME> } --user <SSH_USER> [--device <DEV>]
+  $(basename "$0") --action attach { --vm-ip <IP> | --vm-name <NAME> } --user <SSH_USER> \
+                    --tenant <TENANT_NAME> --image-uuid <UUID> [--image-uuid2 <UUID>]
+  $(basename "$0") --action detach { --vm-ip <IP> | --vm-name <NAME> } --user <SSH_USER> \
+                    --tenant <TENANT_NAME> [--device <DEV>]
 
 Options:
   --action       attach or detach  (required)
   --vm-ip        IP address of the target VM  (mutually exclusive with --vm-name)
   --vm-name      Nova instance name of the target VM  (mutually exclusive with --vm-ip)
   --user         SSH username for the hypervisor  (required)
+  --tenant       OpenStack project/tenant name used when resolving the VM by IP  (required)
   --image-uuid   Glance image UUID to attach  (required for attach)
   --image-uuid2  Second Glance image UUID  (optional, attach only, max 2 total)
   --device       Device name to detach (e.g. sdm); detach only. Omit to detach all CDROMs.
+  --nfs-mount    Path to the NFS Glance mount on the hypervisor (default: /var/opt/imagelibrary/data/glance)
+  --virsh-as-root  Run virsh attach-disk via 'sudo su -' (full root login shell). Use when
+                   plain 'sudo virsh' lacks the required environment on the hypervisor.
   --help         Show this help
 EOF
   exit 1
@@ -47,9 +52,12 @@ ACTION=""
 VM_IP=""
 VM_NAME=""
 SSH_USER=""
+TENANT=""
 IMAGE_UUID1=""
 IMAGE_UUID2=""
 DETACH_DEV=""
+VIRSH_AS_ROOT=false
+NFS_GLANCE_MOUNT_ARG=""
 
 [[ $# -eq 0 ]] && usage
 
@@ -59,10 +67,13 @@ while [[ $# -gt 0 ]]; do
     --vm-ip)       VM_IP="$2";       shift 2 ;;
     --vm-name)     VM_NAME="$2";     shift 2 ;;
     --user)        SSH_USER="$2";    shift 2 ;;
+    --tenant)      TENANT="$2";      shift 2 ;;
     --image-uuid)  IMAGE_UUID1="$2"; shift 2 ;;
     --image-uuid2) IMAGE_UUID2="$2"; shift 2 ;;
-    --device)      DETACH_DEV="$2";  shift 2 ;;
-    --help|-h)     usage ;;
+    --device)         DETACH_DEV="$2";       shift 2 ;;
+    --nfs-mount)      NFS_GLANCE_MOUNT_ARG="$2"; shift 2 ;;
+    --virsh-as-root)  VIRSH_AS_ROOT=true;   shift ;;
+    --help|-h)        usage ;;
     *)
       echo "ERROR: Unknown option: $1" >&2
       usage
@@ -72,6 +83,7 @@ done
 
 [[ -z "$ACTION" ]]   && { echo "ERROR: --action is required"  >&2; usage; }
 [[ -z "$SSH_USER" ]] && { echo "ERROR: --user is required"    >&2; usage; }
+[[ -z "$TENANT" ]]   && { echo "ERROR: --tenant is required"  >&2; usage; }
 [[ -z "$VM_IP" && -z "$VM_NAME" ]] && {
   echo "ERROR: one of --vm-ip or --vm-name is required" >&2; usage
 }
@@ -87,6 +99,7 @@ done
 [[ "$ACTION" == "attach" && -n "$DETACH_DEV" ]] && {
   echo "ERROR: --device is only valid with --action detach" >&2; usage
 }
+[[ -n "$NFS_GLANCE_MOUNT_ARG" ]] && NFS_GLANCE_MOUNT="$NFS_GLANCE_MOUNT_ARG"
 
 # ---------------------------------------------------------------------------
 # OpenStack: resolve Nova instance UUID and name from IP
@@ -94,11 +107,11 @@ done
 
 # Prints "UUID:NAME" to stdout; errors to stderr.
 resolve_instance_by_ip() {
-  local ip="$1"
+  local ip="$1" tenant="$2"
   local json count
 
-  echo "Resolving instance for IP ${ip} ..." >&2
-  json=$(openstack server list --ip "$ip" -f json -c ID -c Name 2>/dev/null)
+  echo "Resolving instance for IP ${ip} (tenant: ${tenant}) ..." >&2
+  json=$(OS_PROJECT_NAME="$tenant" openstack server list --ip "$ip" -f json -c ID -c Name  2>/dev/null)
   json="${json:-[]}"
   count=$(python3 -c "import sys,json; print(len(json.load(sys.stdin)))" <<< "$json")
 
@@ -140,7 +153,7 @@ resolve_instance_by_name() {
   local json
 
   echo "Resolving instance by name '${name}' ..." >&2
-  json=$(openstack server show "$name" -f json -c ID -c Name 2>/dev/null)
+  json=$(openstack server show "$name" -f json -c id -c OS-EXT-SRV-ATTR:hostname 2>/dev/null)
   if [[ -z "$json" ]]; then
     echo "ERROR: No Nova instance found with name '${name}'" >&2
     return 1
@@ -307,7 +320,7 @@ remote_resolve_domain() {
   # instance UUID at boot time.
   domain=$(ssh_run "$hv_ip" "$user" \
     "sudo virsh list --all --name | while IFS= read -r name; do
-       [[ -z \"\$name\" ]] && continue
+       [ -z \"\$name\" ] && continue
        if sudo virsh domuuid \"\$name\" 2>/dev/null | grep -qF '${instance_uuid}'; then
          echo \"\$name\"
          break
@@ -353,8 +366,14 @@ do_attach() {
   for image_uuid in "${image_uuids[@]}"; do
     local iso_path="${NFS_GLANCE_MOUNT}/${image_uuid}"
 
-    # Verify ISO is accessible on the hypervisor before attempting attach
-    if ! ssh_run "$hv_ip" "$user" "[[ -f '${iso_path}' ]]"; then
+    # Verify ISO is accessible on the hypervisor before attempting attach.
+    # When --virsh-as-root is set, run the check as root to avoid NFS permission
+    # visibility issues for the SSH user.
+    local file_check_cmd="[ -f '${iso_path}' ]"
+    if [[ "$VIRSH_AS_ROOT" == true ]]; then
+      file_check_cmd="sudo su - -c \"[ -f '${iso_path}' ]\""
+    fi
+    if ! ssh_run "$hv_ip" "$user" "$file_check_cmd"; then
       echo "ERROR: Glance image not found on NFS at ${iso_path} on ${hv_ip}" >&2
       return 1
     fi
@@ -363,9 +382,14 @@ do_attach() {
     target_dev=$(remote_next_free_dev "$hv_ip" "$user" "$domain")
 
     echo "Attaching ${iso_path} to domain ${domain} as ${target_dev} ..."
-    ssh_run "$hv_ip" "$user" \
-      "sudo virsh attach-disk '${domain}' '${iso_path}' '${target_dev}' \
+    local virsh_cmd="virsh attach-disk '${domain}' '${iso_path}' '${target_dev}' \
          --type cdrom --mode readonly --driver qemu --subdriver raw --live"
+    if [[ "$VIRSH_AS_ROOT" == true ]]; then
+      # Run virsh inside a full root login-shell when plain sudo lacks the required environment
+      ssh_run "$hv_ip" "$user" "sudo su - -c \"${virsh_cmd}\""
+    else
+      ssh_run "$hv_ip" "$user" "sudo ${virsh_cmd}"
+    fi
 
     echo "Attached successfully."
     echo "  INSTANCE=${instance_uuid}"
@@ -437,7 +461,7 @@ do_detach() {
 
 # 1. Resolve instance UUID and name from VM IP or instance name
 if [[ -n "$VM_IP" ]]; then
-  raw=$(resolve_instance_by_ip "$VM_IP")
+  raw=$(resolve_instance_by_ip "$VM_IP" "$TENANT")
 else
   raw=$(resolve_instance_by_name "$VM_NAME")
 fi

@@ -25,8 +25,8 @@ ok()   { _out "  ${GRN}[OK]${RST}   $*";   ((PASS++));  }
 warn() { _out "  ${YLW}[WARN]${RST} $*";   ((WARN++));  }
 fail() { _out "  ${RED}[FAIL]${RST} $*";   ((FAIL++));  }
 info() { _out "  ${CYN}[INFO]${RST} $*";              }
-hdr()  { _out "\n${BLD}━━━ $* ━━━${RST}";             }
-val()  { _out "         current : ${CYN}$1${RST}  →  expected: ${BLD}$2${RST}"; }
+hdr()  { _out "\n${BLD}=== $* ===${RST}";              }
+val()  { _out "  ${CYN}$1${RST} → $2";                }
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 sysctl_get() { sysctl -n "$1" 2>/dev/null || echo "UNSET"; }
@@ -57,13 +57,8 @@ check_sysctl_le() {
 
 # =============================================================================
 _out ""
-_out "${BLD}╔══════════════════════════════════════════════════════════════╗${RST}"
-_out "${BLD}║     KVM / Nova Compute Tuning Audit — Ubuntu 22.04           ║${RST}"
-_out "${BLD}╚══════════════════════════════════════════════════════════════╝${RST}"
-_out "  Host    : $(hostname)"
-_out "  Date    : $(date)"
-_out "  Kernel  : $(uname -r)"
-_out "  User    : $(whoami)"
+_out "${BLD}KVM / Nova Compute Tuning Audit — Ubuntu 22.04${RST}"
+_out "  host=$(hostname)  kernel=$(uname -r)  user=$(whoami)  date=$(date)"
 if [[ $EUID -ne 0 ]]; then
   warn "Not running as root — some checks may be incomplete"; fi
 
