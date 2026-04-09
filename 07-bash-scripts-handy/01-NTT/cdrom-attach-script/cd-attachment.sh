@@ -116,14 +116,20 @@ resolve_instance_by_ip() {
   json=$(OS_PROJECT_NAME="$tenant" openstack server list --ip "$ip" -f json -c ID -c Name -c Networks 2>/dev/null)
   json="${json:-[]}"
 
-  # Keep only entries where the Networks value contains the IP as a word boundary match
+  # Post-filter for exact IP match. Networks may be a dict {net: ip_str} or a plain string
+  # depending on OpenStack CLI version — handle both.
   filtered=$(python3 -c "
 import sys, json, re
 target = sys.argv[1]
-# Match the IP only when followed by end-of-string, comma, space, or semicolon — not a digit
 pattern = re.compile(r'(?<![0-9])' + re.escape(target) + r'(?![0-9])')
 data = json.load(sys.stdin)
-print(json.dumps([s for s in data if pattern.search(s.get('Networks', ''))]))
+result = []
+for s in data:
+    nets = s.get('Networks', '')
+    nets_str = ','.join(str(v) for v in nets.values()) if isinstance(nets, dict) else str(nets)
+    if pattern.search(nets_str):
+        result.append(s)
+print(json.dumps(result))
 " "$ip" <<< "$json")
 
   count=$(python3 -c "import sys,json; print(len(json.load(sys.stdin)))" <<< "$filtered")

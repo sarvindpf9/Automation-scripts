@@ -285,31 +285,6 @@ check_ovs_bridges() {
     done <<< "$bridges"
 }
 
-find_multipath_for_device() {
-    local dev="$1"
-    local real
-    real=$(readlink -f "$dev" 2>/dev/null || echo "$dev")
-
-    if [[ "$real" == /dev/mapper/* ]]; then
-        echo "$real"
-        return
-    fi
-
-    local mpath
-    mpath=$(multipath -ll 2>/dev/null | grep -B1 -F "$real" | head -n1 | awk '{print $1}' || true)
-    if [[ -z "$mpath" ]]; then
-        local base
-        base=$(basename "$real")
-        mpath=$(multipath -ll 2>/dev/null | grep -B1 -F "$base" | head -n1 | awk '{print $1}' || true)
-    fi
-
-    if [[ -n "$mpath" ]]; then
-        echo "/dev/mapper/$mpath"
-    else
-        echo "$real"
-    fi
-}
-
 check_virsh_vms() {
     local uuid="$1"
 
@@ -368,19 +343,19 @@ check_virsh_vms() {
 
 
 if [[ ${#CHECK_IP[@]} -gt 0 ]]; then
-    #health_check "1.  PASSWORDLESS SUDO"  check_sudoers
-    health_check "1.  CHECK BOND MODE"    check_bond
-    health_check "2.  NTP"                check_ntp
-    health_check "3.  PACKAGES"           check_packages
-    health_check "4.  SERVICES"           check_services
-    health_check "5.  ISCSI INITIATOR"    check_iscsi_initiator
-    health_check "6.  MULTIPATH BLACKLIST" check_multipath_blacklist
-    health_check "7.  LVM FILTERS"        check_lvm_filters
-    health_check "8.  /ETC/HOSTS"         check_hosts
-    health_check "9.  PF9 SERVICES"       check_pf9_services
-    health_check "10. OVS BRIDGES"        check_ovs_bridges
+    health_check "1.  PASSWORDLESS SUDO"  check_sudoers
+    health_check "2.  CHECK BOND MODE"    check_bond
+    health_check "3.  NTP"                check_ntp
+    health_check "4.  PACKAGES"           check_packages
+    health_check "5.  SERVICES"           check_services
+    health_check "6.  ISCSI INITIATOR"    check_iscsi_initiator
+    health_check "7.  MULTIPATH BLACKLIST" check_multipath_blacklist
+    health_check "8.  LVM FILTERS"        check_lvm_filters
+    health_check "9.  /ETC/HOSTS"         check_hosts
+    health_check "10. PF9 SERVICES"       check_pf9_services
+    health_check "11. OVS BRIDGES"        check_ovs_bridges
 fi
 
 if [[ -n "$VIRSH_UUID" ]]; then
-    health_check "11. VIRSH VMS"          check_virsh_vms "$VIRSH_UUID"
+    health_check "12. VIRSH VMS"          check_virsh_vms "$VIRSH_UUID"
 fi
