@@ -111,9 +111,22 @@ resolve_instance_by_ip() {
   local json count
 
   echo "Resolving instance for IP ${ip} (tenant: ${tenant}) ..." >&2
-  json=$(OS_PROJECT_NAME="$tenant" openstack server list --ip "$ip" -f json -c ID -c Name  2>/dev/null)
+  # Fetch with Networks column so we can post-filter for an exact IP match.
+  # openstack server list --ip does a substring match (10.96.7.1 also returns .11, .12, etc.)
+  json=$(OS_PROJECT_NAME="$tenant" openstack server list --ip "$ip" -f json -c ID -c Name -c Networks 2>/dev/null)
   json="${json:-[]}"
-  count=$(python3 -c "import sys,json; print(len(json.load(sys.stdin)))" <<< "$json")
+
+  # Keep only entries where the Networks value contains the IP as a word boundary match
+  filtered=$(python3 -c "
+import sys, json, re
+target = sys.argv[1]
+# Match the IP only when followed by end-of-string, comma, space, or semicolon — not a digit
+pattern = re.compile(r'(?<![0-9])' + re.escape(target) + r'(?![0-9])')
+data = json.load(sys.stdin)
+print(json.dumps([s for s in data if pattern.search(s.get('Networks', ''))]))
+" "$ip" <<< "$json")
+
+  count=$(python3 -c "import sys,json; print(len(json.load(sys.stdin)))" <<< "$filtered")
 
   if [[ "$count" -eq 0 ]]; then
     echo "ERROR: No Nova instance found with IP '${ip}'" >&2
@@ -124,14 +137,14 @@ import sys, json
 d = json.load(sys.stdin)[0]
 # Colon-delimited so caller can split on first ':' safely
 print(d['ID'] + ':' + d['Name'])
-" <<< "$json"
+" <<< "$filtered"
   else
     echo "Multiple instances match IP '${ip}':" >&2
     python3 -c "
 import sys, json
 for i, s in enumerate(json.load(sys.stdin), 1):
     print(f'  {i}) {s[\"ID\"]}  {s[\"Name\"]}', file=__import__(\"sys\").stderr)
-" <<< "$json"
+" <<< "$filtered"
     local choice
     read -rp "Select instance [1-${count}]: " choice </dev/tty
     python3 -c "
@@ -139,7 +152,7 @@ import sys, json
 data = json.load(sys.stdin)
 d = data[int(sys.argv[1]) - 1]
 print(d['ID'] + ':' + d['Name'])
-" "$choice" <<< "$json"
+" "$choice" <<< "$filtered"
   fi
 }
 
