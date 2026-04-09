@@ -4,7 +4,7 @@ Orchestrator script to attach or detach Glance-backed ISO images to a running Op
 
 ---
 
-## `cd-attachment.sh`
+## `attach-detach-cdrom.sh`
 
 The primary script. Handles both attach and detach in a single entry point.
 
@@ -24,7 +24,7 @@ The primary script. Handles both attach and detach in a single entry point.
 
 ```bash
 # Attach one ISO
-./cd-attachment.sh \
+./attach-detach-cdrom.sh \
   --action attach \
   --vm-ip <VM_IP> \
   --user <SSH_USER> \
@@ -32,7 +32,7 @@ The primary script. Handles both attach and detach in a single entry point.
   --image-uuid <GLANCE_IMAGE_UUID>
 
 # Attach two ISOs (e.g. OS installer + driver disk)
-./cd-attachment.sh \
+./attach-detach-cdrom.sh \
   --action attach \
   --vm-ip <VM_IP> \
   --user <SSH_USER> \
@@ -41,14 +41,14 @@ The primary script. Handles both attach and detach in a single entry point.
   --image-uuid2 <GLANCE_IMAGE_UUID_2>
 
 # Detach all attached CDROMs
-./cd-attachment.sh \
+./attach-detach-cdrom.sh \
   --action detach \
   --vm-ip <VM_IP> \
   --user <SSH_USER> \
   --tenant <TENANT_NAME>
 
 # Detach a specific CDROM device only
-./cd-attachment.sh \
+./attach-detach-cdrom.sh \
   --action detach \
   --vm-ip <VM_IP> \
   --user <SSH_USER> \
@@ -76,7 +76,7 @@ The primary script. Handles both attach and detach in a single entry point.
 
 ```bash
 # Attach a Windows installer ISO to a VM at 10.0.1.50
-./cd-attachment.sh \
+./attach-detach-cdrom.sh \
   --action attach \
   --vm-ip 10.0.1.50 \
   --user ubuntu \
@@ -84,7 +84,7 @@ The primary script. Handles both attach and detach in a single entry point.
   --image-uuid e1a2b3c4-0000-0000-0000-win2022iso
 
 # Attach OS ISO + VirtIO driver ISO simultaneously (by instance name)
-./cd-attachment.sh \
+./attach-detach-cdrom.sh \
   --action attach \
   --vm-name win2022-prod-01 \
   --user ubuntu \
@@ -93,14 +93,14 @@ The primary script. Handles both attach and detach in a single entry point.
   --image-uuid2 f5d6e7f8-0000-0000-0000-virtiodrivers
 
 # Detach all CDROMs from the same VM
-./cd-attachment.sh \
+./attach-detach-cdrom.sh \
   --action detach \
   --vm-ip 10.0.1.50 \
   --user ubuntu \
   --tenant <TENANT_NAME>
 
 # Detach only the second CDROM (e.g. driver disk on sdn)
-./cd-attachment.sh \
+./attach-detach-cdrom.sh \
   --action detach \
   --vm-ip 10.0.1.50 \
   --user ubuntu \
@@ -108,7 +108,7 @@ The primary script. Handles both attach and detach in a single entry point.
   --device sdn
 
 # Attach using a full root login shell for virsh (when sudo alone is insufficient)
-./cd-attachment.sh \
+./attach-detach-cdrom.sh \
   --action attach \
   --vm-ip 10.0.1.50 \
   --user ubuntu \
@@ -149,16 +149,11 @@ error: Operation not supported: cdrom/floppy device hotplug isn't supported
 To ensure a CDROM slot is present from provisioning, set the following property on the Glance image before booting the VM:
 
 ```bash
-openstack image set <IMAGE_UUID> --property hw_cdrom_bus=ide
+openstack image set <IMAGE_UUID> --property hw_cdrom_bus=scsi --property hw_disk_bus=virtio --property hw_machine_type=pc-i440fx-2.12 --property hw_scsi_model==virtio-scsi
 ```
 
 This causes Nova to include an empty IDE CDROM device in the domain XML at boot, giving libvirt a slot to target at hotplug time. Without it, the only option is cold attach (`--config` without `--live`, requiring a reboot).
 
-Verify a slot exists on a running VM before attempting attach:
-
-```bash
-sudo virsh dumpxml <DOMAIN> | grep -A5 "device='cdrom'"
-```
 
 #### q35 — recommended for new VM deployments
 
@@ -183,21 +178,3 @@ openstack flavor set <FLAVOR> \
 ```
 
 > **Note:** Machine type is baked in at VM creation. Existing i440fx VMs cannot be converted to q35 in-place — a rebuild is required. For existing VMs without a CDROM slot, cold attach remains the only viable option.
-
----
-
-## `attach-cdrom.sh` / `detach-cdrom.sh`
-
-Simpler, standalone wrappers for individual attach and detach operations. Refer to the inline usage comments in each script for arguments — `cd-attachment.sh` is the preferred entry point for new usage.
-
----
-
-## Prerequisites Summary
-
-| Requirement | Detail |
-|-------------|--------|
-| Run from | Jump host / workstation with OpenStack credentials sourced |
-| SSH access | Key-based, `BatchMode=yes` — interactive password auth is not supported |
-| Hypervisor user | Must have permission to run `virsh` commands (typically `root` or a user in the `libvirt` group) |
-| NFS Glance mount | Must be mounted on the hypervisor at `/var/opt/imagelibrary/data/glance` (override at runtime with `--nfs-mount <PATH>`) |
-| OpenStack role | Needs `admin` or `reader` on the project to read `OS-EXT-SRV-ATTR:hypervisor_hostname` from `server show` |
