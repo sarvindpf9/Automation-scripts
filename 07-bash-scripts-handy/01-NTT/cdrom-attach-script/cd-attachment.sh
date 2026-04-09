@@ -161,7 +161,7 @@ resolve_instance_by_name() {
   python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-print(d['ID'] + ':' + d['Name'])
+print(d['id'] + ':' + d['OS-EXT-SRV-ATTR:hostname'])
 " <<< "$json"
 }
 
