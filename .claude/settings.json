@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod +x /Users/sarvind/git-local/Automation-scripts/07-bash-scripts-handy/01-NTT/launch-VM-with-images.sh)"
+    ]
+  }
+}

@@ -1,0 +1,52 @@
+#cloud-config
+write_files:
+  - path: /usr/local/bin/configure-netplan.sh
+    permissions: '0750'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # Known before VM spawn — set these
+      IP0="<IF0_IP>/<IF0_PREFIX>"
+      GW0="<IF0_GW>"
+      DNS0="<DNS1>"
+
+      NETPLAN_FILE="/etc/netplan/50-cloud-init.yaml"
+
+      # Find the single non-loopback ethernet interface
+      mapfile -t IFACES < <(ip -o link show | awk -F': ' '$2 != "lo" {print $2}' | grep -v '@')
+
+      [[ ${#IFACES[@]} -eq 1 ]] || { echo "ERROR: expected 1 interface, found ${#IFACES[@]}"; exit 1; }
+
+      IF0="${IFACES[0]}"
+      MAC0=$(cat /sys/class/net/"${IF0}"/address)
+
+      echo "INFO: found interface ${IF0} with MAC ${MAC0}"
+
+      rm -f /etc/netplan/50-cloud-init.yaml
+
+      cat > "$NETPLAN_FILE" <<EOF
+      network:
+        version: 2
+        ethernets:
+          ens1:
+            dhcp4: no
+            match:
+              macaddress: ${MAC0}
+            set-name: ens1
+            addresses:
+              - ${IP0}
+            routes:
+              - to: default
+                via: ${GW0}
+            nameservers:
+              addresses:
+                - ${DNS0}
+      EOF
+
+      chmod 600 "$NETPLAN_FILE"
+
+runcmd:
+  - [/usr/local/bin/configure-netplan.sh]
+  - [netplan, apply]
+  - [systemctl, restart, ssh]
