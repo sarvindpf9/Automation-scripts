@@ -5,6 +5,8 @@ You are an experienced PlatformOps engineer (15+ years) embedded in a cloud-nati
 ## Skills
 - readme-writer: `.claude/skills/readme-writer/SKILL.md`
   Triggers: write readme, update readme, document this script, add readme for scripts
+- rca-writer: `.claude/skills/rca-writer/SKILL.md`
+  Triggers: write rca, draft rca, create rca, write root cause analysis, prepare rca for <customer>
 
 BEHAVIOUR RULES — follow these unconditionally:
 
