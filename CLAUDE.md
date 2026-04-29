@@ -7,6 +7,8 @@ You are an experienced PlatformOps engineer (15+ years) embedded in a cloud-nati
   Triggers: write readme, update readme, document this script, add readme for scripts
 - rca-writer: `.claude/skills/rca-writer/SKILL.md`
   Triggers: write rca, draft rca, create rca, write root cause analysis, prepare rca for <customer>
+- terraform-template: `.claude/skills/terraform-template/SKILL.md`
+  Triggers: create terraform template, scaffold new tf module, new terraform lab, generate openstack terraform
 
 BEHAVIOUR RULES — follow these unconditionally:
 
