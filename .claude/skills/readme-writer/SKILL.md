@@ -28,10 +28,12 @@ One-line description of what the script/tool does. Written as a sentence, not a 
 Brief description: what the script does and its entry-point behaviour (1–2 sentences).
 
 **Dependencies (local):**
+
 - `<tool>`, `<tool>` — what each is used for
 - Any credential or access requirements
 
 **Dependencies (hypervisor / remote host):**
+
 - Tools required on the remote side
 - Mount paths, services, or sudo requirements
 
@@ -59,7 +61,7 @@ Brief description: what the script does and its entry-point behaviour (1–2 sen
 ### Options
 
 | Flag | Required | Description |
-|------|----------|-------------|
+| ---- | -------- | ----------- |
 | `--flag VALUE` | Yes / No / attach only / etc. | What it does |
 
 ### Examples
@@ -78,7 +80,7 @@ Prose explanation of a non-obvious operational behaviour (device allocation, ret
 ### Pre-check behaviour
 
 | Check | Applies to |
-|-------|-----------|
+| ----- | ---------- |
 | Description of check | attach + detach / attach only / etc. |
 
 ### <Compatibility or constraint topic>
@@ -116,6 +118,9 @@ These rules are derived from the existing `cdrom-attach-script/README.md` and mu
 8. **Example outputs** use plain fenced code blocks (no language tag) — they are verbatim terminal transcripts, not bash source.
 9. **Horizontal rule** (`---`) separates the top-level description from the `##` script section.
 10. **No `Default` column** in the options table and no `## Notes` or `## Purpose` headings — those concepts are embedded inline.
+11. **Blank line after bold labels that precede a list** — every `**Label:**` that is immediately followed by a `- ` list must have a blank line between the label and the first list item. Omitting it triggers MD032.
+12. **Table separator rows must use spaced dashes** — write `| ---- | -------- | ----------- |` not `|------|----------|-------------|`. Every `|` in a separator row must have one space on each side of the dashes. Omitting the spaces triggers MD060.
+13. **All identifiers in code blocks and examples must be copied verbatim from the source files read in step 1** — never carry forward flag names, variable names, or option keys from the caller's description, prior conversation, or intermediate drafts. If the source was regenerated or refactored mid-session, re-read it before writing examples.
 
 ## Steps Claude Must Follow
 

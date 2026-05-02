@@ -194,7 +194,7 @@ resource "openstack_compute_instance_v2" "vm" {
   name        = "${var.custom_name}-instance-${count.index}"
   image_id    = local.selected_image_id
   flavor_name = var.flavor_name
-  user_data   = data.template_file.cloud_init.rendered
+  user_data   = file("${path.module}/cloud-init.yaml")
 
   network {
     name = "${var.custom_name}-net-${count.index}"
@@ -218,10 +218,6 @@ resource "openstack_compute_volume_attach_v2" "attach" {
 ### `datasource.tf`
 
 ```hcl
-data "template_file" "cloud_init" {
-  template = file("${path.module}/cloud-init.yaml")
-}
-
 data "openstack_compute_flavor_v2" "flavor_name" {
   name = var.flavor_name
 }

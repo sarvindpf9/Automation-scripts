@@ -1,0 +1,2 @@
+[console_scripts]
+sow-mcp-server = sow_mcp.server:main

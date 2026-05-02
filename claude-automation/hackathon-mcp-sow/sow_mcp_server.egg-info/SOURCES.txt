@@ -1,0 +1,12 @@
+pyproject.toml
+sow_mcp/__init__.py
+sow_mcp/models.py
+sow_mcp/parser.py
+sow_mcp/server.py
+sow_mcp_server.egg-info/PKG-INFO
+sow_mcp_server.egg-info/SOURCES.txt
+sow_mcp_server.egg-info/dependency_links.txt
+sow_mcp_server.egg-info/entry_points.txt
+sow_mcp_server.egg-info/requires.txt
+sow_mcp_server.egg-info/top_level.txt
+tests/test_parser.py
