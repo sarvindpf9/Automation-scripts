@@ -395,17 +395,57 @@ Remove a H2 section:
 {"op": "remove", "heading": "<H2 heading text exactly as shown in the outline>"}
 
 Add a new H2 section:
-{"op": "add", "day_heading": "<H1 heading text>", "after_heading": "<H2 heading text or null>", "title": "<new section title without a number prefix>", "instruction": "<detailed content guidance for the new section>"}
+{"op": "add", "day_heading": "<H1 heading text>", "after_heading": "<H2 heading text or null>", "title": "<new section title without a number prefix>", "instruction": "<one-line content summary>"}
 
 Modify an existing H2 section:
-{"op": "modify", "heading": "<H2 heading text exactly as shown in the outline>", "instruction": "<what to change and how>"}
+{"op": "modify", "heading": "<H2 heading text exactly as shown in the outline>", "instruction": "<one-line description of the change>"}
 
 Rules:
 - Use heading text exactly as it appears in the outline (no leading # symbols).
 - "day_heading" must be an H1 heading from the outline.
 - "after_heading": H2 heading after which the new section is inserted; null to append at end of the day block.
+- The "instruction" value MUST be a single-line string. Do NOT include literal newline characters,
+  bullet points, or multi-line text inside any JSON string value. Summarise the intent in one sentence.
 - Return only the JSON array — no preamble, no commentary, no code fences.
 """
+
+
+def _repair_json(raw: str) -> str:
+    """Escape bare newlines and control characters found inside JSON string values.
+
+    Claude occasionally emits multi-line text inside a JSON string field which
+    makes json.loads raise 'Unterminated string'. This walks the raw text as a
+    character stream, tracking whether we are inside a string, and replaces any
+    literal newline/carriage-return/tab with their JSON escape sequences.
+    """
+    out: list[str] = []
+    in_string = False
+    escape_next = False
+    for ch in raw:
+        if escape_next:
+            out.append(ch)
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            out.append(ch)
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            out.append(ch)
+            continue
+        if in_string:
+            if ch == "\n":
+                out.append("\\n")
+                continue
+            if ch == "\r":
+                out.append("\\r")
+                continue
+            if ch == "\t":
+                out.append("\\t")
+                continue
+        out.append(ch)
+    return "".join(out)
 
 
 def _plan_edits(instructions: str, sections: list[_DocSection]) -> list[dict]:
@@ -429,6 +469,8 @@ def _plan_edits(instructions: str, sections: list[_DocSection]) -> list[dict]:
     # Strip accidental markdown code fences
     raw = re.sub(r"^```(?:json)?\s*\n?", "", raw)
     raw = re.sub(r"\n?```\s*$", "", raw)
+    # Repair bare newlines inside JSON string values before parsing
+    raw = _repair_json(raw)
     return json.loads(raw)
 
 
