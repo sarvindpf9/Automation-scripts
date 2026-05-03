@@ -190,6 +190,7 @@ The server fetches live content from these sources to answer queries and build a
 | `sow-reader` | `.claude/skills/sow-reader/SKILL.md` | `parse_sow`, SOW PDF uploaded, extract SOW sections |
 | `engagement-tracker` | `.claude/skills/engagement-tracker/SKILL.md` | `generate_tracker`, issues/bugs/SOW tracker |
 | `automation-builder` | `.claude/skills/automation-builder/SKILL.md` | `build_automation`, OpenStack/PCD script generation |
+| `pdf-renderer` | `.claude/skills/pdf-renderer/SKILL.md` | modify PDF renderer, change theme/colours/layout, add element type, debug PDF formatting |
 
 ---
 

@@ -73,7 +73,16 @@ _EXTRACT_TOOL: dict = {
 
 def _parse_issues_with_claude(raw_text: str) -> list[dict]:
     """Use Claude to extract a structured issues list from raw text."""
+    if not raw_text.strip():
+        log.warning("_parse_issues_with_claude called with empty text — returning empty list")
+        return []
     client = anthropic.Anthropic()
+    content: list[dict] = []
+    if len(raw_text) > 500:
+        content.append({"type": "text", "text": raw_text, "cache_control": {"type": "ephemeral"}})
+    else:
+        content.append({"type": "text", "text": raw_text})
+    content.append({"type": "text", "text": "Extract all issues and call store_issues."})
     response = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=4096,
@@ -83,19 +92,7 @@ def _parse_issues_with_claude(raw_text: str) -> list[dict]:
         ),
         tools=[_EXTRACT_TOOL],
         tool_choice={"type": "tool", "name": "store_issues"},
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": raw_text,
-                        "cache_control": {"type": "ephemeral"},
-                    },
-                    {"type": "text", "text": "Extract all issues and call store_issues."},
-                ],
-            }
-        ],
+        messages=[{"role": "user", "content": content}],
     )
     tool_block = next(
         (b for b in response.content if b.type == "tool_use" and b.name == "store_issues"),
@@ -110,6 +107,9 @@ def _parse_issues_with_claude(raw_text: str) -> list[dict]:
 def _parse_issues(data: str) -> list[dict]:
     """Parse issues from JSON string or raw text via Claude."""
     stripped = data.strip()
+    if not stripped:
+        log.warning("No issue text provided — returning empty list")
+        return []
     if stripped.startswith("[") or stripped.startswith("{"):
         try:
             parsed = json.loads(stripped)
@@ -119,7 +119,7 @@ def _parse_issues(data: str) -> list[dict]:
                 return parsed["issues"]
         except json.JSONDecodeError:
             log.debug("JSON parse failed — falling back to Claude extraction")
-    return _parse_issues_with_claude(data)
+    return _parse_issues_with_claude(stripped)
 
 
 def _write_summary_sheet(wb: Workbook, customer_name: str, issues: list[dict]) -> None:
