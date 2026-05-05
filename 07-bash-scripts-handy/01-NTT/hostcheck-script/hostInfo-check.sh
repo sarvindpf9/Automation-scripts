@@ -3,25 +3,22 @@
 set -euo pipefail
 
 VIRSH_UUID=""
-ARGS=()
+CHECK_SUDOERS=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --virsh) ;;  # kept for backwards compat; --uuid implies virsh
-        --uuid)  shift; VIRSH_UUID="$1" ;;
-        *)       ARGS+=("$1") ;;
+        --virsh)       ;;  # kept for backwards compat; --uuid implies virsh
+        --uuid)        shift; VIRSH_UUID="$1" ;;
+        check-sudoers) CHECK_SUDOERS=true ;;
+        *)
+            echo "Unknown argument: $1"
+            echo "Usage: $0 [--uuid <vm-uuid>] [check-sudoers]"
+            echo "  --uuid <uuid>   also check virsh VM disk/multipath"
+            echo "  check-sudoers   also run passwordless sudo check"
+            exit 1
+            ;;
     esac
     shift
 done
-
-if [[ ${#ARGS[@]} -eq 0 && -z "$VIRSH_UUID" ]]; then
-    echo "Usage: $0 [--uuid <vm-uuid>] [<ip-to-check-in-etc-hosts> [ip2] ...]"
-    echo "  --uuid <uuid>   check virsh VM disk/multipath only"
-    echo "  <ip> ...        run all host checks (bond, ntp, packages, etc.)"
-    echo "  Both together   run all checks including virsh"
-    exit 1
-fi
-
-CHECK_IP=("${ARGS[@]}")
 
 # ── Color definitions ──────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -169,22 +166,149 @@ check_iscsi_initiator() {
     fi
 }
 
-check_multipath_blacklist() {
-    if [[ -r /etc/multipath.conf ]]; then
-        local BLACKLIST
-        BLACKLIST=$(awk '/^[[:space:]]*blacklist[[:space:]]*\{/,/^[[:space:]]*\}/ {if (/devnode|wwid|device/) print}' /etc/multipath.conf 2>/dev/null)
-        if [[ -n "$BLACKLIST" ]]; then
-            OK "Blacklist entries found:"
-            while IFS= read -r line; do
-                INFO "  $line"
-            done <<< "$BLACKLIST"
-        else
-            WARN "No blacklist entries in multipath.conf"
+check_iscsid_conf() {
+    if ! command -v iscsid >/dev/null 2>&1; then
+        WARN "iscsid not installed — skipping iscsid.conf check"
+        return
+    fi
+
+    local conf=/etc/iscsi/iscsid.conf
+    if [[ ! -r "$conf" ]]; then
+        FAIL "$conf not found or not readable"
+        return
+    fi
+
+    local -A expected=(
+        ["node.session.timeo.replacement_timeout"]="15"
+        ["node.conn[0].timeo.login_timeout"]="5"
+        ["node.conn[0].timeo.logout_timeout"]="5"
+        ["node.session.err_timeo.abort_timeout"]="10"
+        ["node.session.err_timeo.reset_timeout"]="15"
+        ["node.session.err_timeo.lu_reset_timeout"]="20"
+    )
+
+    for key in \
+        "node.session.timeo.replacement_timeout" \
+        "node.conn[0].timeo.login_timeout" \
+        "node.conn[0].timeo.logout_timeout" \
+        "node.session.err_timeo.abort_timeout" \
+        "node.session.err_timeo.reset_timeout" \
+        "node.session.err_timeo.lu_reset_timeout"; do
+
+        local want="${expected[$key]}" got
+        # FS splits on whitespace-padded '='; key is compared literally (safe with [0] and dots)
+        got=$(awk -F'[[:space:]]*=[[:space:]]*' -v k="$key" '
+            /^[[:space:]]*#/ { next }
+            NF >= 2 {
+                kf = $1; gsub(/^[[:space:]]+|[[:space:]]+$/, "", kf)
+                if (kf == k) { print $2; exit }
+            }
+        ' "$conf")
+
+        if   [[ "$got" == "$want" ]]; then OK   "$key = $got"
+        elif [[ -n "$got" ]];         then WARN "$key = $got  (expected: $want)"
+        else                               FAIL "$key not set  (expected: $want)"
         fi
-    else
+    done
+}
+
+check_multipath_blacklist() {
+    if [[ ! -r /etc/multipath.conf ]]; then
         FAIL "multipath.conf not found — local drive blacklist missing"
         INFO "Run: /lib/udev/scsi_id -gud </dev/diskname>  to get WWID for local drives"
+        return
     fi
+
+    local conf=/etc/multipath.conf
+
+    # ── defaults section ──────────────────────────────────────────────────────
+    local defaults_block
+    defaults_block=$(awk '/^[[:space:]]*defaults[[:space:]]*\{/{f=1;next} f&&/^[[:space:]]*\}/{f=0;next} f{print}' "$conf")
+
+    if [[ -z "$defaults_block" ]]; then
+        FAIL "defaults{} section missing"
+    else
+        local -A defaults_want=(
+            [find_multipaths]="yes"
+            [no_path_retry]="12"
+            [polling_interval]="5"
+            [user_friendly_names]="no"
+        )
+        for key in find_multipaths no_path_retry polling_interval user_friendly_names; do
+            local want="${defaults_want[$key]}" got
+            got=$(printf '%s\n' "$defaults_block" | awk -v k="$key" '$1==k{print $2; exit}')
+            if   [[ "$got" == "$want" ]]; then OK   "defaults: $key = $got"
+            elif [[ -n "$got" ]];         then WARN "defaults: $key = $got  (expected: $want)"
+            else                               FAIL "defaults: $key missing  (expected: $want)"
+            fi
+        done
+    fi
+
+    # ── blacklist section ──────────────────────────────────────────────────────
+    local BLACKLIST
+    BLACKLIST=$(awk '/^[[:space:]]*blacklist[[:space:]]*\{/,/^[[:space:]]*\}/ {if (/devnode|wwid|device/) print}' "$conf")
+    if [[ -n "$BLACKLIST" ]]; then
+        OK "blacklist: entries found:"
+        while IFS= read -r line; do INFO "  $line"; done <<< "$BLACKLIST"
+    else
+        WARN "blacklist: no wwid/devnode entries"
+    fi
+
+    # ── devices / NETAPP device block ─────────────────────────────────────────
+    local netapp_block
+    netapp_block=$(awk '
+        /^[[:space:]]*devices[[:space:]]*\{/ { in_d=1; depth=1; next }
+        in_d {
+            if (/\{/) { depth++; if (depth==2) { buf=""; in_dev=1 } }
+            if (/\}/) {
+                depth--
+                if (depth==1 && in_dev) {
+                    if (buf ~ /vendor[[:space:]]+"?NETAPP"?/) print buf
+                    in_dev=0
+                }
+                if (depth==0) in_d=0
+            }
+            if (in_dev && !/[{}]/) buf = buf "\n" $0
+        }
+    ' "$conf")
+
+    if [[ -z "$netapp_block" ]]; then
+        FAIL "devices: no NETAPP device block found"
+    else
+        OK "devices: NETAPP device block found"
+
+        # single-word value params
+        local -A sv_want=(
+            [path_grouping_policy]="group_by_prio"
+            [prio]="alua"
+            [failback]="immediate"
+            [fast_io_fail_tmo]="5"
+            [dev_loss_tmo]="30"
+        )
+        for key in path_grouping_policy prio failback fast_io_fail_tmo dev_loss_tmo; do
+            local want="${sv_want[$key]}" got
+            got=$(printf '%s\n' "$netapp_block" | awk -v k="$key" '$1==k{print $2; exit}')
+            if   [[ "$got" == "$want" ]]; then OK   "devices.device: $key = $got"
+            elif [[ -n "$got" ]];         then WARN "devices.device: $key = $got  (expected: $want)"
+            else                               FAIL "devices.device: $key missing  (expected: $want)"
+            fi
+        done
+
+        # quoted / multi-word value params
+        for kv in "product:LUN.*" "path_selector:service-time 0" "features:0" "hardware_handler:1 alua"; do
+            local key="${kv%%:*}" want="${kv#*:}" got
+            got=$(printf '%s\n' "$netapp_block" | awk -v k="$key" \
+                '$1==k{for(i=2;i<=NF;i++) printf "%s%s",$i,(i<NF?" ":""); print ""; exit}' | tr -d '"')
+            if   [[ "$got" == "$want" ]]; then OK   "devices.device: $key = $got"
+            elif [[ -n "$got" ]];         then WARN "devices.device: $key = $got  (expected: $want)"
+            else                               FAIL "devices.device: $key missing  (expected: $want)"
+            fi
+        done
+    fi
+
+    INFO ""
+    INFO "── /etc/multipath.conf ──"
+    while IFS= read -r line; do INFO "$line"; done < "$conf"
 }
 
 check_lvm_filters() {
@@ -204,32 +328,56 @@ check_lvm_filters() {
 check_hosts() {
     if [[ ! -r /etc/hosts ]]; then
         FAIL "/etc/hosts not readable"
-        return 1
+        return
     fi
-    for ip in "${CHECK_IP[@]}"; do
-        local ENTRY
-        ENTRY=$(grep -E "^[[:space:]]*$ip([[:space:]]+|$)" /etc/hosts || true)
-        if [[ -n "$ENTRY" ]]; then
-            OK "$ip  found in /etc/hosts"
-            INFO "$ENTRY"
-        else
-            FAIL "$ip  not found in /etc/hosts"
-        fi
-    done
+    printf '  %b[ NOTE ]%b  Review and Ensure the SVM host IP mapping is set for the SVM FQDN to be resolvable\n' "$RED" "$NC"
+    INFO ""
+    while IFS= read -r line; do INFO "$line"; done < /etc/hosts
 }
 
 check_pf9_services() {
-    local services=(pf9-ostackhost.service pf9-cindervolume-base.service pf9-glance-api.service)
+    local services=(pf9-ostackhost.service pf9-cindervolume-base.service pf9-glance-api.service pf9-comms.service pf9-ha-slave.service pf9-hostagent.service pf9-libvirt-exporter.service pf9-neutron-ovn-metadata-agent.service pf9-node-exporter.service pf9-novncproxy.service pf9-prometheus.service pf9-remote-write.service pf9-sidekick.service)
+    local ostackhost_running=false ha_slave_present=true
     for svc in "${services[@]}"; do
         local unit="${svc}"
         if systemctl is-active --quiet "$unit" 2>/dev/null; then
             OK "$svc: running"
+            [[ "$svc" == "pf9-ostackhost.service" ]] && ostackhost_running=true
         elif systemctl list-units --type=service --all 2>/dev/null | grep -q "${unit}"; then
             FAIL "$svc: not running / failed"
+            [[ "$svc" == "pf9-ha-slave.service" ]] && ha_slave_present=false
         else
             WARN "$svc: not installed"
+            [[ "$svc" == "pf9-ha-slave.service" ]] && ha_slave_present=false
         fi
     done
+
+    if [[ "$ha_slave_present" == false ]]; then
+        INFO "pf9-ha-slave not present — pf9-remote-write.service:"
+        if systemctl is-active --quiet pf9-remote-write.service 2>/dev/null; then
+            OK "pf9-remote-write.service: running"
+        elif systemctl list-units --type=service --all 2>/dev/null | grep -q "pf9-remote-write.service"; then
+            FAIL "pf9-remote-write.service: not running / failed"
+        else
+            WARN "pf9-remote-write.service: not installed"
+        fi
+    fi
+
+    if [[ "$ostackhost_running" == true ]]; then
+        local xml_uuids virsh_names only_xml only_virsh xml_count virsh_count
+        xml_uuids=$(find /etc/libvirt/qemu/ -maxdepth 1 -name '*.xml' -exec basename {} .xml \; 2>/dev/null | sort)
+        virsh_names=$(virsh list --all --name 2>/dev/null | grep -v '^$' | sort)
+
+        only_xml=$(comm -23 <(echo "$xml_uuids") <(echo "$virsh_names"))
+        only_virsh=$(comm -13 <(echo "$xml_uuids") <(echo "$virsh_names"))
+
+        [[ -n "$only_xml" ]]   && echo -e "=== XML only (no virsh entry) ===\n$only_xml"
+        [[ -n "$only_virsh" ]] && echo -e "=== virsh only (no XML file) ===\n$only_virsh"
+
+        xml_count=$(echo "$xml_uuids" | grep -c .)
+        virsh_count=$(echo "$virsh_names" | grep -c .)
+        echo -e "\n${CYAN}${BOLD}=== Totals VMs running on this hypervisor ===${NC}\nnum_vm_configs_local    $xml_count\ntotal_vms_virsh:        $virsh_count"
+    fi
 }
 
 check_ovs_bridges() {
@@ -342,20 +490,21 @@ check_virsh_vms() {
 }
 
 
-if [[ ${#CHECK_IP[@]} -gt 0 ]]; then
-    health_check "1.  PASSWORDLESS SUDO"  check_sudoers
-    health_check "2.  CHECK BOND MODE"    check_bond
-    health_check "3.  NTP"                check_ntp
-    health_check "4.  PACKAGES"           check_packages
-    health_check "5.  SERVICES"           check_services
-    health_check "6.  ISCSI INITIATOR"    check_iscsi_initiator
-    health_check "7.  MULTIPATH BLACKLIST" check_multipath_blacklist
-    health_check "8.  LVM FILTERS"        check_lvm_filters
-    health_check "9.  /ETC/HOSTS"         check_hosts
-    health_check "10. PF9 SERVICES"       check_pf9_services
-    health_check "11. OVS BRIDGES"        check_ovs_bridges
-fi
+[[ "$CHECK_SUDOERS" == true ]] && health_check "1.  PASSWORDLESS SUDO"   check_sudoers
+
+health_check "2.  CHECK BOND MODE"     check_bond
+health_check "3.  NTP"                 check_ntp
+health_check "4.  PACKAGES"            check_packages
+health_check "5.  SERVICES"            check_services
+health_check "6.  ISCSI INITIATOR"     check_iscsi_initiator
+health_check "7.  ISCSID CONF"         check_iscsid_conf
+health_check "8.  MULTIPATH BLACKLIST"  check_multipath_blacklist
+health_check "9.  LVM FILTERS"         check_lvm_filters
+health_check "10. PF9 SERVICES"        check_pf9_services
+health_check "11. OVS BRIDGES"         check_ovs_bridges
+
+health_check "12. /ETC/HOSTS"              check_hosts
 
 if [[ -n "$VIRSH_UUID" ]]; then
-    health_check "12. VIRSH VMS"          check_virsh_vms "$VIRSH_UUID"
+    health_check "13. VIRSH VMS"           check_virsh_vms "$VIRSH_UUID"
 fi
