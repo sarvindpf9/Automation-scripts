@@ -42,8 +42,14 @@ sudo ./hostInfo-check.sh check-sudoers
 # Also inspect a VM's disk/multipath mapping by UUID
 sudo ./hostInfo-check.sh --uuid <vm-uuid>
 
-# All checks: host + sudoers audit + VM inspection
-sudo ./hostInfo-check.sh check-sudoers --uuid <vm-uuid>
+# Write output to an auto-named timestamped log file
+sudo ./hostInfo-check.sh --log
+
+# Write output to a specific file
+sudo ./hostInfo-check.sh --output /tmp/hostcheck.log
+
+# All checks: host + sudoers + VM inspection + log file
+sudo ./hostInfo-check.sh check-sudoers --uuid <vm-uuid> --log
 ```
 
 ### Options
@@ -52,6 +58,10 @@ sudo ./hostInfo-check.sh check-sudoers --uuid <vm-uuid>
 | ---- | -------- | ----------- |
 | `check-sudoers` | No | Adds a passwordless sudo scan of `/etc/sudoers` and `/etc/sudoers.d/*` |
 | `--uuid <vm-uuid>` | No | Adds virsh VM block device and multipath mapping check for the given UUID |
+| `--log` | No | Writes output to `hostcheck-<hostname>-<YYYYMMDD_HHMMSS>.log` in the current directory |
+| `--output <file>` | No | Writes output to the specified file path |
+
+> The terminal always receives coloured output. The log file receives the same output with ANSI colour codes stripped. A header line with hostname and timestamp is written at the top of the file.
 
 ### Checks performed
 

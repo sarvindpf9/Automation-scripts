@@ -4,21 +4,32 @@ set -euo pipefail
 
 VIRSH_UUID=""
 CHECK_SUDOERS=false
+OUTPUT_FILE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --virsh)       ;;  # kept for backwards compat; --uuid implies virsh
         --uuid)        shift; VIRSH_UUID="$1" ;;
         check-sudoers) CHECK_SUDOERS=true ;;
+        --log)         OUTPUT_FILE="hostcheck-$(hostname -s)-$(date '+%Y%m%d_%H%M%S').log" ;;
+        --output)      shift; OUTPUT_FILE="$1" ;;
         *)
             echo "Unknown argument: $1"
-            echo "Usage: $0 [--uuid <vm-uuid>] [check-sudoers]"
-            echo "  --uuid <uuid>   also check virsh VM disk/multipath"
-            echo "  check-sudoers   also run passwordless sudo check"
+            echo "Usage: $0 [--uuid <vm-uuid>] [check-sudoers] [--log | --output <file>]"
+            echo "  --uuid <uuid>     also check virsh VM disk/multipath"
+            echo "  check-sudoers     also run passwordless sudo check"
+            echo "  --log             write output to hostcheck-<hostname>-<timestamp>.log"
+            echo "  --output <file>   write output to the specified file"
             exit 1
             ;;
     esac
     shift
 done
+
+if [[ -n "$OUTPUT_FILE" ]]; then
+    printf "=== hostInfo-check | host: %s | %s ===\n\n" \
+        "$(hostname -s)" "$(date '+%Y-%m-%d %H:%M:%S')" > "$OUTPUT_FILE"
+    exec > >(tee >(sed 's/\x1b\[[0-9;]*m//g' >> "$OUTPUT_FILE")) 2>&1
+fi
 
 # ── Color definitions ──────────────────────────────────────────────────────────
 RED='\033[0;31m'
