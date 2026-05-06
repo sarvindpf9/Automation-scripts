@@ -337,12 +337,13 @@ check_hosts() {
 
 check_pf9_services() {
     local services=(pf9-ostackhost.service pf9-cindervolume-base.service pf9-glance-api.service pf9-comms.service pf9-ha-slave.service pf9-hostagent.service pf9-libvirt-exporter.service pf9-neutron-ovn-metadata-agent.service pf9-node-exporter.service pf9-novncproxy.service pf9-prometheus.service pf9-remote-write.service pf9-sidekick.service)
-    local ostackhost_running=false ha_slave_present=true
+    local ostackhost_running=false cindervolume_running=false ha_slave_present=true
     for svc in "${services[@]}"; do
         local unit="${svc}"
         if systemctl is-active --quiet "$unit" 2>/dev/null; then
             OK "$svc: running"
-            [[ "$svc" == "pf9-ostackhost.service" ]] && ostackhost_running=true
+            [[ "$svc" == "pf9-ostackhost.service" ]]          && ostackhost_running=true
+            [[ "$svc" == "pf9-cindervolume-base.service" ]]   && cindervolume_running=true
         elif systemctl list-units --type=service --all 2>/dev/null | grep -q "${unit}"; then
             FAIL "$svc: not running / failed"
             [[ "$svc" == "pf9-ha-slave.service" ]] && ha_slave_present=false
@@ -364,6 +365,29 @@ check_pf9_services() {
     fi
 
     if [[ "$ostackhost_running" == true ]]; then
+        local nova_conf="/opt/pf9/etc/nova/conf.d/nova_override.conf"
+        printf "\n  %b[ nova_override.conf ]%b\n" "$CYAN" "$NC"
+        if [[ -r "$nova_conf" ]]; then
+            local vol_mp iscsi_mp
+            vol_mp=$(grep -E '^\s*volume_use_multipath\s*=' "$nova_conf" 2>/dev/null || true)
+            if [[ -n "$vol_mp" ]]; then
+                OK "volume_use_multipath: $vol_mp"
+            else
+                WARN "volume_use_multipath not set in nova_override.conf"
+            fi
+            iscsi_mp=$(grep -E '^\s*iscsi_use_multipath\s*=' "$nova_conf" 2>/dev/null || true)
+            if [[ -n "$iscsi_mp" ]]; then
+                OK "iscsi_use_multipath: $iscsi_mp"
+            else
+                WARN "iscsi_use_multipath not set in nova_override.conf"
+            fi
+            INFO ""
+            INFO "── $nova_conf ──"
+            while IFS= read -r line; do INFO "$line"; done < "$nova_conf"
+        else
+            WARN "nova_override.conf not found or not readable: $nova_conf"
+        fi
+
         local xml_uuids virsh_names only_xml only_virsh xml_count virsh_count
         xml_uuids=$(find /etc/libvirt/qemu/ -maxdepth 1 -name '*.xml' -exec basename {} .xml \; 2>/dev/null | sort)
         virsh_names=$(virsh list --all --name 2>/dev/null | grep -v '^$' | sort)
@@ -377,6 +401,24 @@ check_pf9_services() {
         xml_count=$(echo "$xml_uuids" | grep -c .)
         virsh_count=$(echo "$virsh_names" | grep -c .)
         echo -e "\n${CYAN}${BOLD}=== Totals VMs running on this hypervisor ===${NC}\nnum_vm_configs_local    $xml_count\ntotal_vms_virsh:        $virsh_count"
+    fi
+
+    if [[ "$cindervolume_running" == true ]]; then
+        local cinder_conf="/opt/pf9/etc/pf9-cindervolume-base/conf.d/cinder.conf"
+        printf "\n  %b[ cinder.conf ]%b\n" "$CYAN" "$NC"
+        if [[ -r "$cinder_conf" ]]; then
+            for param in reserved_percentage goodness_function; do
+                local val
+                val=$(grep -E "^\s*${param}\s*=" "$cinder_conf" 2>/dev/null || true)
+                if [[ -n "$val" ]]; then
+                    OK "$val"
+                else
+                    WARN "$param not set in cinder.conf"
+                fi
+            done
+        else
+            WARN "cinder.conf not found or not readable: $cinder_conf"
+        fi
     fi
 }
 
