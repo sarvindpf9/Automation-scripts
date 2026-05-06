@@ -68,10 +68,32 @@ All sections below run on every invocation unless noted.
 | 7 | **iscsid.conf** | Validates six timeout parameters in `/etc/iscsi/iscsid.conf` against expected values; skipped silently if `iscsid` is not installed |
 | 8 | **Multipath blacklist** | Parses `/etc/multipath.conf` — checks `defaults{}` (4 keys), `blacklist{}` entries, and the NETAPP `device{}` block (9 parameters); prints full file content at end of section |
 | 9 | **LVM filters** | Checks `/etc/lvm/lvm.conf` for `filter` and `global_filter` stanzas |
-| 10 | **PF9 services** | `systemctl` status for 13 PF9 services; if `pf9-ha-slave` is absent, additionally reports `pf9-remote-write` status; if `pf9-ostackhost` is running, prints virsh/XML VM count and any UUID mismatches |
+| 10 | **PF9 services** | `systemctl` status for 13 PF9 services; if `pf9-ha-slave` is absent, additionally reports `pf9-remote-write` status; if `pf9-ostackhost` is running, checks `volume_use_multipath` and `iscsi_use_multipath` in `nova_override.conf`, prints the full file, then prints virsh/XML VM count and any UUID mismatches; if `pf9-cindervolume-base` is running, checks `reserved_percentage` and `goodness_function` in `cinder.conf` |
 | 11 | **OVS bridges** | Lists all OVS bridges, their IPv4 addresses, and physical uplink ports (skips `patch`/`internal` types; lists all ports for `br-int`) |
 | 12 | **`/etc/hosts`** | Prints a red advisory to review SVM FQDN/IP mappings, then prints full `/etc/hosts` contents |
 | 13 | **Virsh VM** *(`--uuid` flag only)* | Resolves UUID to domain name; lists block devices via `virsh domblklist --details`; maps `dm-*` devices to `/dev/mapper/<name>` via `multipath -ll` |
+
+### PF9 service config checks
+
+These run automatically when the relevant service is detected as active — no flags required.
+
+**`pf9-ostackhost` — `/opt/pf9/etc/nova/conf.d/nova_override.conf`**
+
+| Parameter | Check |
+| --------- | ----- |
+| `volume_use_multipath` | Presence check — WARN if not set |
+| `iscsi_use_multipath` | Presence check — WARN if not set |
+
+Full file contents are printed after the parameter checks.
+
+**`pf9-cindervolume-base` — `/opt/pf9/etc/pf9-cindervolume-base/conf.d/cinder.conf`**
+
+| Parameter | Check |
+| --------- | ----- |
+| `reserved_percentage` | Presence check — WARN if not set |
+| `goodness_function` | Presence check — WARN if not set |
+
+---
 
 ### iscsid.conf expected values
 
