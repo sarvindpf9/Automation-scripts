@@ -75,7 +75,7 @@ All sections below run on every invocation unless noted.
 | 4 | **Packages** | `dpkg -l` presence check for: `lsscsi`, `sg3-utils`, `multipath-tools`, `scsitools`, `open-iscsi`, `nfs-common` |
 | 5 | **Services** | `systemctl is-active` for: `iscsid`, `multipathd` |
 | 6 | **iSCSI initiator** | Reads `/etc/iscsi/initiatorname.iscsi`; lists active sessions via `iscsiadm -m session` |
-| 7 | **iscsid.conf** | Validates six timeout parameters in `/etc/iscsi/iscsid.conf` against expected values; skipped silently if `iscsid` is not installed |
+| 7 | **iscsid.conf** | Validates five timeout parameters in `/etc/iscsi/iscsid.conf` against expected values; skipped silently if `iscsid` is not installed |
 | 8 | **Multipath blacklist** | Parses `/etc/multipath.conf` — checks `defaults{}` (4 keys), `blacklist{}` entries, and the NETAPP `device{}` block (9 parameters); prints full file content at end of section |
 | 9 | **LVM filters** | Checks `/etc/lvm/lvm.conf` for `filter` and `global_filter` stanzas |
 | 10 | **PF9 services** | `systemctl` status for 13 PF9 services; if `pf9-ha-slave` is absent, additionally reports `pf9-remote-write` status; if `pf9-ostackhost` is running, checks `volume_use_multipath` and `iscsi_use_multipath` in `nova_override.conf`, prints the full file, then prints virsh/XML VM count and any UUID mismatches; if `pf9-cindervolume-base` is running, checks `reserved_percentage` and `goodness_function` in `cinder.conf` |
@@ -113,7 +113,6 @@ Full file contents are printed after the parameter checks.
 | `node.conn[0].timeo.login_timeout` | `5` |
 | `node.conn[0].timeo.logout_timeout` | `5` |
 | `node.session.err_timeo.abort_timeout` | `10` |
-| `node.session.err_timeo.reset_timeout` | `15` |
 | `node.session.err_timeo.lu_reset_timeout` | `20` |
 
 ### multipath.conf expected values

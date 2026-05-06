@@ -194,7 +194,6 @@ check_iscsid_conf() {
         ["node.conn[0].timeo.login_timeout"]="5"
         ["node.conn[0].timeo.logout_timeout"]="5"
         ["node.session.err_timeo.abort_timeout"]="10"
-        ["node.session.err_timeo.reset_timeout"]="15"
         ["node.session.err_timeo.lu_reset_timeout"]="20"
     )
 
@@ -203,7 +202,6 @@ check_iscsid_conf() {
         "node.conn[0].timeo.login_timeout" \
         "node.conn[0].timeo.logout_timeout" \
         "node.session.err_timeo.abort_timeout" \
-        "node.session.err_timeo.reset_timeout" \
         "node.session.err_timeo.lu_reset_timeout"; do
 
         local want="${expected[$key]}" got
@@ -284,7 +282,7 @@ check_multipath_blacklist() {
     ' "$conf")
 
     if [[ -z "$netapp_block" ]]; then
-        FAIL "devices: no NETAPP device block found"
+        WARN "devices: no NETAPP device block found."
     else
         OK "devices: NETAPP device block found"
 
