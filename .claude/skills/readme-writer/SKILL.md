@@ -11,6 +11,8 @@ description: "Use this skill when the user asks to write, create, or update a RE
 - If it does not exist → create it from scratch.
 - Infer all content from the script itself. Never invent values.
 - If the script's purpose is ambiguous, ask one question before proceeding.
+- Check for any senstive data (e.g., credentials, IPs, api keys, username, hostnames, mac-ids, subnet ) and redact them in the README. 
+- highlight the presence of any sensitive data in the README with a comment.
 
 ## Output Format
 
