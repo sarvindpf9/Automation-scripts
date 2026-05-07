@@ -171,19 +171,195 @@ Sections are separated by a cyan bold header banner.
 ```bash
 # Run all host checks on the local node
 sudo ./hostInfo-check.sh
+./hostcheck-v5.sh
 
+━━━  2.  CHECK BOND MODE ━━━
+  [ OK ]  bond0  mode: IEEE 802.3ad Dynamic link aggregation  IP: none
+  [ OK ]  bond1  mode: IEEE 802.3ad Dynamic link aggregation  IP: none
+
+━━━  3.  NTP   ━━━
+  [ OK ]  NTP active and clock synchronized
+
+━━━  4.  PACKAGES ━━━
+  [ OK ]  lsscsi
+  [ OK ]  sg3-utils
+  [ OK ]  multipath-tools
+  [ OK ]  scsitools
+  [ OK ]  open-iscsi
+  [ OK ]  nfs-common
+
+━━━  5.  SERVICES ━━━
+  [ OK ]  iscsid is running
+  [ OK ]  multipathd is running
+
+━━━  6.  ISCSI INITIATOR ━━━
+  [ OK ]  iqn.2004-10.com.ubuntu:01:dfbae5d5032-nttinfradc5pn01
+  [ OK ]  iscsid: running
+             iSCSI sessions:
+               tcp: [1] xxx.xxx.xx.xx:3260,1029 iqn.1992-08.com.netapp:sn.1387eeed321711ef833dd039eab7da2d:vs.8 (non-flash)
+               tcp: [2] xxx.xxx.xxx.xxx:3260,1028 iqn.1992-08.com.netapp:sn.1387eeed321711ef833dd039eab7da2d:vs.8 (non-flash)
+
+━━━  7.  ISCSID CONF ━━━
+  [ WARN ]  node.session.timeo.replacement_timeout = 120  (expected: 15)
+  [ WARN ]  node.conn[0].timeo.login_timeout = 15  (expected: 5)
+  [ WARN ]  node.conn[0].timeo.logout_timeout = 15  (expected: 5)
+  [ WARN ]  node.session.err_timeo.abort_timeout = 15  (expected: 10)
+  [ WARN ]  node.session.err_timeo.lu_reset_timeout = 30  (expected: 20)
+
+━━━  8.  MULTIPATH BLACKLIST ━━━
+  [ OK ]  defaults: find_multipaths = yes
+  [ FAIL ]  defaults: no_path_retry missing  (expected: 12)
+  [ FAIL ]  defaults: polling_interval missing  (expected: 5)
+  [ OK ]  defaults: user_friendly_names = no
+  [ OK ]  blacklist: entries found:
+               wwid nvme-eui.xxx
+               wwid nvme-eui.xxx
+  [ WARN ]  devices: no NETAPP device block found.
+
+             ── /etc/multipath.conf ──
+             defaults {
+             user_friendly_names no
+             find_multipaths yes
+             }
+             blacklist {
+             wwid nvme-eui.xxx
+             wwid nvme-eui.xxx
+             }
+
+━━━  9.  LVM FILTERS ━━━
+  [ OK ]  filter:                  filter = [ "a|^/dev/nvme[0-9]+n[0-9]+$|", "a|^/dev/nvme[0-9]+n[0-9]+p[0-9]+$|", "a|^/dev/md[0-9]+$|", "a|^/dev/md[0-9]+p[0-9]+$|", "a|^/dev/sda[0-9]*$|","r|.*|" ]
+  [ OK ]  global_filter:           global_filter = [ "a|^/dev/nvme[0-9]+n[0-9]+$|", "a|^/dev/nvme[0-9]+n[0-9]+p[0-9]+$|", "a|^/dev/md[0-9]+$|", "a|^/dev/md[0-9]+p[0-9]+$|", "a|^/dev/sda[0-9]*$|","r|.*|" ]
+
+━━━  10. PF9 SERVICES ━━━
+  [ OK ]  pf9-ostackhost.service: running
+  [ OK ]  pf9-cindervolume-base.service: running
+  [ OK ]  pf9-glance-api.service: running
+  [ OK ]  pf9-comms.service: running
+  [ OK ]  pf9-ha-slave.service: running
+  [ OK ]  pf9-hostagent.service: running
+  [ OK ]  pf9-libvirt-exporter.service: running
+  [ OK ]  pf9-neutron-ovn-metadata-agent.service: running
+  [ OK ]  pf9-node-exporter.service: running
+  [ OK ]  pf9-novncproxy.service: running
+  [ OK ]  pf9-prometheus.service: running
+  [ OK ]  pf9-remote-write.service: running
+  [ OK ]  pf9-sidekick.service: running
+
+  [ nova_override.conf ]
+  [ OK ]  volume_use_multipath: volume_use_multipath = True
+  [ OK ]  iscsi_use_multipath: iscsi_use_multipath = True
+
+             ── /opt/pf9/etc/nova/conf.d/nova_override.conf ──
+             [libvirt]
+             live_migration_uri = qemu+tls://%s/system?no_verify=1&pkipath=/etc/pf9/certs/libvirt
+             cpu_mode = custom
+             cpu_models = Icelake-Server-noTSX
+             iscsi_use_multipath = True
+             volume_use_multipath = True
+
+             live_migration_scheme = tls
+             live_migration_inbound_addr = xxx.xxx.xxx.xxx
+             live_migration_with_native_tls = true
+             live_migration_tunnelled = false
+
+=== Totals VMs running on this hypervisor ===
+num_vm_configs_local    1
+total_vms_virsh:        1
+
+  [ cinder.conf ]
+  [ WARN ]  reserved_percentage not set in cinder.conf
+  [ WARN ]  goodness_function not set in cinder.conf
+
+━━━  11. OVS BRIDGES ━━━
+  [ WARN ]  Bridge: br-int  (no IPv4 address)
+             Ports: listing all ports on br-int (including virtual):
+             tap04950ca9-7a
+             tap05a770cd-4c
+             tap11f23cfc-e3
+             tap19d6c106-e8
+             tap60635d0d-06
+             tapec0a47a7-ca
+  [ WARN ]  Bridge: br-phy1  (no IPv4 address)
+             Physical ports: bond0
+  [ OK ]  Bridge: br-phy2  IP: xxx.xxx.xxx.xx/24
+             Physical ports: ens9f0
+  [ OK ]  Bridge: br-phy4  IP: xxx.xxx.xxx.xxx/24
+             Physical ports: vlan10
+
+━━━  12. /ETC/HOSTS ━━━
+  [ NOTE ]  Review and Ensure the SVM host IP mapping is set for the SVM FQDN to be resolvable
+
+             127.0.0.1 localhost
+
+             # The following lines are desirable for IPv6 capable hosts
+             ::1     ip6-localhost ip6-loopback
+             fe00::0 ip6-localnet
+             ff00::0 ip6-mcastprefix
+             ff02::1 ip6-allnodes
+             ff02::2 ip6-allrouters
+
+━━━  15. VIRSH LIVENESS ━━━
+  [ OK ]  virsh is responsive
+```
+
+```bash
 # Run all checks + passwordless sudo audit
 sudo ./hostInfo-check.sh check-sudoers
 
+━━━  1.  PASSWORDLESS SUDO ━━━
+  [ OK ]  Users with passwordless sudo (14):
+             pf9 (sudoers)
+             cinder-rootwrap (/etc/sudoers.d/cinder-rootwrap)
+             glance-rootwrap (/etc/sudoers.d/glance-rootwrap)
+             nova-rootwrap (/etc/sudoers.d/nova-rootwrap)
+             pf9-hostagent (/etc/sudoers.d/pf9-hostagent)
+             pf9-neutron (/etc/sudoers.d/pf9-neutron)
+             pf9-vmha-agent (/etc/sudoers.d/pf9-vmha-agent)
+...
+```
+```bash
 # Check for orphaned or faulty multipath devices
 sudo ./hostInfo-check.sh check-mpath-orphan
 
+━━━  13. MULTIPATH ORPHANS ━━━
+  [ WARN ]  Orphan: 3600a098038314e65782b575176676b5a (dm-10) — not referenced by any VM XML
+               3600a098038314e65782b575176676b5a dm-10 NETAPP,LUN C-Mode
+               size=160G features='3 queue_if_no_path pg_init_retries 50' hwhandler='1 alua' wp=rw
+               |-+- policy='service-time 0' prio=50 status=active
+               | `- 17:0:0:14 sdf  8:80   active ready running
+               `-+- policy='service-time 0' prio=10 status=enabled
+                 `- 18:0:0:14 sdaa 65:160 active ready running
+...
+```
+
+```bash
 # List per-VM DM disks and multipath path state for all running VMs
 sudo ./hostInfo-check.sh list-vm-mpath
+...
+━━━  14. VM DISK MULTIPATH ━━━
 
+  VM: a66532c7-211f-48f2-be5e-6411ab93a605             UUID: a66532c7-211f-48f2-be5e-6411ab93a605
+  [ OK ]  dm-16  →  3600a098038314e66303f575166592d48  active (2/2 paths up)
+
+...
+```
+
+```bash
 # Inspect VM disk/multipath mapping by UUID
 sudo ./hostInfo-check.sh --uuid 4a2f1c3d-7e8b-4d5a-9f0e-1b2c3d4e5f6a
+...
+━━━  16. VIRSH VMS ━━━
+  [ OK ]  VM: 4a2f1c3d-7e8b-4d5a-9f0e-1b2c3d4e5f6a  (UUID: 4a2f1c3d-7e8b-4d5a-9f0e-1b2c3d4e5f6a)
+             Block device list:
+                Type    Device   Target   Source
+               ---------------------------------------
+                block   disk     vda      /dev/dm-16
+             Multipath mapping:
+               dm-16  ->  3600a098038314e66303f575166592d48  (/dev/mapper/3600a098038314e66303f575166592d48)
+...
+```
 
+```bash
 # Full run: all host checks + sudoers + orphan check + VM mpath + VM inspection
 sudo ./hostInfo-check.sh check-sudoers check-mpath-orphan list-vm-mpath --uuid 4a2f1c3d-7e8b-4d5a-9f0e-1b2c3d4e5f6a
 ```
