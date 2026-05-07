@@ -193,7 +193,7 @@ sudo ./hostInfo-check.sh
   [ OK ]  multipathd is running
 
 ━━━  6.  ISCSI INITIATOR ━━━
-  [ OK ]  iqn.2004-10.com.ubuntu:01:dfbae5d5032-nttinfradc5pn01
+  [ OK ]  iqn.2004-10.com.ubuntu:01:dfbae5d5032-xxx
   [ OK ]  iscsid: running
              iSCSI sessions:
                tcp: [1] xxx.xxx.xx.xx:3260,1029 iqn.1992-08.com.netapp:sn.1387eeed321711ef833dd039eab7da2d:vs.8 (non-flash)
