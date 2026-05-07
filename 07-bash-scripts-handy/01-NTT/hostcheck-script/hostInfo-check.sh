@@ -755,8 +755,13 @@ check_multipath_orphans() {
         faulty=$(grep -E '\b(failed|faulty)\b' <<< "$block" || true)
         if [[ -n "$faulty" ]]; then
             found_issues=true
-            WARN "Failed/faulty paths on $map ($dm)${used_by:+  [VM: $used_by]}:"
-            while IFS= read -r l; do [[ -n "$l" ]] && INFO "  $l"; done <<< "$faulty"
+            FAIL "Failed/faulty paths on $map ($dm)${used_by:+  [VM: $used_by]}:"
+            echo "--------------------------------------------------------------"
+            echo " "
+            # Skip re-printing path lines for orphans — already shown in the stanza dump above
+            if [[ -n "$used_by" ]]; then
+                while IFS= read -r l; do [[ -n "$l" ]] && INFO "  $l"; done <<< "$faulty"
+            fi
         fi
     done
 

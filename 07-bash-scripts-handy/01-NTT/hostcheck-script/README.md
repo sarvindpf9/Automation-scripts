@@ -16,7 +16,7 @@ Runs a comprehensive set of read-only health checks on the local host — bond i
 - `iscsiadm` — iSCSI session listing (read-only, `iscsid` must be installed)
 - `multipath` — `multipath -ll` listing (read-only)
 - `ovs-vsctl` — OVS bridge enumeration (gracefully skipped if absent)
-- `virsh` — VM UUID resolution and block device listing (only with `--uuid`)
+- `virsh` — VM liveness check (section 15, unconditional); per-VM disk/path listing (section 14, `list-vm-mpath`); UUID resolution and block device mapping (section 16, `--uuid`); gracefully skipped for sections 14 and 15 if absent
 
 **Dependencies (hypervisor / remote host):**
 
@@ -25,10 +25,12 @@ Runs a comprehensive set of read-only health checks on the local host — bond i
 
 **What it does:**
 
-1. Parses optional `check-sudoers` and `--uuid` flags; errors on any unrecognised argument
-2. Runs all host checks unconditionally (sections 2–12)
+1. Parses optional flags; errors on any unrecognised argument
+2. Runs all host checks and virsh liveness unconditionally (sections 2–12, 15)
 3. If `check-sudoers` is passed, also runs the passwordless sudo audit (section 1)
-4. If `--uuid` is passed, also resolves the VM UUID and maps its block devices to multipath entries (section 13)
+4. If `check-mpath-orphan` is passed, scans for orphaned or faulty multipath devices (section 13)
+5. If `list-vm-mpath` is passed, lists per-VM DM disks and multipath path state (section 14)
+6. If `--uuid` is passed, also resolves the VM UUID and maps its block devices to multipath entries (section 16)
 
 ### Usage
 
@@ -42,14 +44,20 @@ sudo ./hostInfo-check.sh check-sudoers
 # Also inspect a VM's disk/multipath mapping by UUID
 sudo ./hostInfo-check.sh --uuid <vm-uuid>
 
+# Check for orphaned or faulty multipath devices
+sudo ./hostInfo-check.sh check-mpath-orphan
+
+# List per-VM DM disks and multipath path state
+sudo ./hostInfo-check.sh list-vm-mpath
+
 # Write output to an auto-named timestamped log file
 sudo ./hostInfo-check.sh --log
 
 # Write output to a specific file
 sudo ./hostInfo-check.sh --output /tmp/hostcheck.log
 
-# All checks: host + sudoers + VM inspection + log file
-sudo ./hostInfo-check.sh check-sudoers --uuid <vm-uuid> --log
+# All checks: host + sudoers + orphans + VM mpath + VM inspection + log file
+sudo ./hostInfo-check.sh check-sudoers check-mpath-orphan list-vm-mpath --uuid <vm-uuid> --log
 ```
 
 ### Options
@@ -57,9 +65,12 @@ sudo ./hostInfo-check.sh check-sudoers --uuid <vm-uuid> --log
 | Flag | Required | Description |
 | ---- | -------- | ----------- |
 | `check-sudoers` | No | Adds a passwordless sudo scan of `/etc/sudoers` and `/etc/sudoers.d/*` |
+| `check-mpath-orphan` | No | Checks for multipath devices not referenced by any VM XML, and flags any device with failed/faulty paths |
+| `list-vm-mpath` | No | For each running VM, prints its DM-* disks, the corresponding multipath map name, and path state (active/degraded/dead) |
 | `--uuid <vm-uuid>` | No | Adds virsh VM block device and multipath mapping check for the given UUID |
 | `--log` | No | Writes output to `hostcheck-<hostname>-<YYYYMMDD_HHMMSS>.log` in the current directory |
 | `--output <file>` | No | Writes output to the specified file path |
+| `--virsh` | No | Accepted for backwards compatibility; has no effect (`--uuid` implies virsh) |
 
 > The terminal always receives coloured output. The log file receives the same output with ANSI colour codes stripped. A header line with hostname and timestamp is written at the top of the file.
 
@@ -81,7 +92,10 @@ All sections below run on every invocation unless noted.
 | 10 | **PF9 services** | `systemctl` status for 13 PF9 services; if `pf9-ha-slave` is absent, additionally reports `pf9-remote-write` status; if `pf9-ostackhost` is running, checks `volume_use_multipath` and `iscsi_use_multipath` in `nova_override.conf`, prints the full file, then prints virsh/XML VM count and any UUID mismatches; if `pf9-cindervolume-base` is running, checks `reserved_percentage` and `goodness_function` in `cinder.conf` |
 | 11 | **OVS bridges** | Lists all OVS bridges, their IPv4 addresses, and physical uplink ports (skips `patch`/`internal` types; lists all ports for `br-int`) |
 | 12 | **`/etc/hosts`** | Prints a red advisory to review SVM FQDN/IP mappings, then prints full `/etc/hosts` contents |
-| 13 | **Virsh VM** *(`--uuid` flag only)* | Resolves UUID to domain name; lists block devices via `virsh domblklist --details`; maps `dm-*` devices to `/dev/mapper/<name>` via `multipath -ll` |
+| 13 | **Multipath orphans** *(check-mpath-orphan flag only)* | Builds a map of all `dm-*` devices referenced by VM XMLs in `/etc/libvirt/qemu/`; any multipath device not in that map is flagged as an orphan (leftover from a deleted/detached VM); additionally scans every device stanza for `failed`/`faulty` path lines and reports `[ FAIL ]` regardless of VM association |
+| 14 | **VM disk multipath** *(list-vm-mpath flag only)* | For each running VM, retrieves its UUID and DM-* block devices (via `virsh domblklist`, with XML fallback); pre-parses `multipath -ll` once into per-`dm-X` maps and classifies each device as `active` (all paths up), `degraded` (some paths up), or `dead` (no active paths) |
+| 15 | **Virsh liveness** | Runs `virsh list --all` with a 10 s timeout; on timeout or error, scans for defunct/zombie qemu processes, resolves their VM UUID via cmdline or `/var/run/libvirt/qemu/*.pid` files, then prints the full `multipath -ll` stanza for each DM disk belonging to the zombie VM |
+| 16 | **Virsh VM** *(`--uuid` flag only)* | Resolves UUID to domain name; lists block devices via `virsh domblklist --details`; maps `dm-*` devices to `/dev/mapper/<name>` via `multipath -ll` |
 
 ### PF9 service config checks
 
@@ -161,15 +175,21 @@ sudo ./hostInfo-check.sh
 # Run all checks + passwordless sudo audit
 sudo ./hostInfo-check.sh check-sudoers
 
+# Check for orphaned or faulty multipath devices
+sudo ./hostInfo-check.sh check-mpath-orphan
+
+# List per-VM DM disks and multipath path state for all running VMs
+sudo ./hostInfo-check.sh list-vm-mpath
+
 # Inspect VM disk/multipath mapping by UUID
 sudo ./hostInfo-check.sh --uuid 4a2f1c3d-7e8b-4d5a-9f0e-1b2c3d4e5f6a
 
-# Full run: all host checks + sudoers + VM inspection
-sudo ./hostInfo-check.sh check-sudoers --uuid 4a2f1c3d-7e8b-4d5a-9f0e-1b2c3d4e5f6a
+# Full run: all host checks + sudoers + orphan check + VM mpath + VM inspection
+sudo ./hostInfo-check.sh check-sudoers check-mpath-orphan list-vm-mpath --uuid 4a2f1c3d-7e8b-4d5a-9f0e-1b2c3d4e5f6a
 ```
 
 ### Requirements
 
 - **OS:** Debian/Ubuntu (uses `dpkg`, `systemctl`, `timedatectl`)
 - **Privileges:** Requires `root` or a user with access to `virsh`, `multipath`, `iscsiadm`, and `ovs-vsctl`
-- **Conditional tools:** `virsh` (only needed with `--uuid`); `ovs-vsctl` (OVS check skipped gracefully if absent); `iscsid` (section 7 skipped if not installed)
+- **Conditional tools:** `virsh` (section 15 runs unconditionally but skips gracefully if absent; sections 14 and 16 require it for `list-vm-mpath` and `--uuid` respectively); `ovs-vsctl` (OVS check skipped gracefully if absent); `iscsid` (section 7 skipped if not installed)
