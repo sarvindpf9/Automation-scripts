@@ -350,6 +350,17 @@ check_hosts() {
     while IFS= read -r line; do INFO "$line"; done < /etc/hosts
 }
 
+check_pf9_packages() {
+    local PACKAGES="openvswitch-common openvswitch-switch ovn-common ovn-host pf9-cindervolume-base pf9-cindervolume-config pf9-comms pf9-glance-role pf9-ha-slave pf9-hostagent pf9-ip-discovery pf9-neutron-base pf9-neutron-ovn-controller pf9-neutron-ovn-metadata-agent pf9-ostackhost python3-openvswitch"
+    for pkg in $PACKAGES; do
+        if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
+            OK "$pkg"
+        else
+            FAIL "PF9 $pkg (not installed)"
+        fi
+    done
+}
+
 check_pf9_services() {
     local services=(pf9-ostackhost.service pf9-cindervolume-base.service pf9-glance-api.service pf9-comms.service pf9-ha-slave.service pf9-hostagent.service pf9-libvirt-exporter.service pf9-neutron-ovn-metadata-agent.service pf9-node-exporter.service pf9-novncproxy.service pf9-prometheus.service pf9-remote-write.service pf9-sidekick.service)
     local ostackhost_running=false cindervolume_running=false ha_slave_present=true
@@ -892,8 +903,9 @@ health_check "6.  ISCSI INITIATOR"     check_iscsi_initiator
 health_check "7.  ISCSID CONF"         check_iscsid_conf
 health_check "8.  MULTIPATH BLACKLIST"  check_multipath_blacklist
 health_check "9.  LVM FILTERS"         check_lvm_filters
-health_check "10. PF9 SERVICES"        check_pf9_services
-health_check "11. OVS BRIDGES"         check_ovs_bridges
+health_check "10. PF9 PACKAGES"        check_pf9_packages
+health_check "11. PF9 SERVICES"        check_pf9_services
+health_check "12. OVS BRIDGES"         check_ovs_bridges
 
 health_check "12. /ETC/HOSTS"              check_hosts
 [[ "$CHECK_MPATH_ORPHAN" == true ]] && health_check "13. MULTIPATH ORPHANS"  check_multipath_orphans

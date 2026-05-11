@@ -6,7 +6,7 @@ Host health-check script for OpenStack KVM compute nodes. Validates storage, net
 
 ## `hostInfo-check.sh`
 
-Runs a comprehensive set of read-only health checks on the local host — bond interfaces, NTP, packages, iSCSI, multipath, LVM, PF9 services, OVS bridges, and `/etc/hosts`. No IP input is required. Optionally adds a passwordless-sudo audit and a virsh VM disk/multipath inspection.
+Runs a comprehensive set of read-only health checks on the local host — bond interfaces, NTP, packages, iSCSI, multipath, LVM, PF9 packages, PF9 services, OVS bridges, and `/etc/hosts`. No IP input is required. Optionally adds a passwordless-sudo audit and a virsh VM disk/multipath inspection.
 
 **Dependencies (local):**
 
@@ -26,7 +26,7 @@ Runs a comprehensive set of read-only health checks on the local host — bond i
 **What it does:**
 
 1. Parses optional flags; errors on any unrecognised argument
-2. Runs all host checks and virsh liveness unconditionally (sections 2–12, 15)
+2. Runs all host checks and virsh liveness unconditionally (sections 2–12 and 15; note the script labels both OVS bridges and /etc/hosts as section 12)
 3. If `check-sudoers` is passed, also runs the passwordless sudo audit (section 1)
 4. If `check-mpath-orphan` is passed, scans for orphaned or faulty multipath devices (section 13)
 5. If `list-vm-mpath` is passed, lists per-VM DM disks and multipath path state (section 14)
@@ -89,9 +89,10 @@ All sections below run on every invocation unless noted.
 | 7 | **iscsid.conf** | Validates five timeout parameters in `/etc/iscsi/iscsid.conf` against expected values; skipped silently if `iscsid` is not installed |
 | 8 | **Multipath blacklist** | Parses `/etc/multipath.conf` — checks `defaults{}` (4 keys), `blacklist{}` entries, and the NETAPP `device{}` block (9 parameters); prints full file content at end of section |
 | 9 | **LVM filters** | Checks `/etc/lvm/lvm.conf` for `filter` and `global_filter` stanzas |
-| 10 | **PF9 services** | `systemctl` status for 13 PF9 services; if `pf9-ha-slave` is absent, additionally reports `pf9-remote-write` status; if `pf9-ostackhost` is running, checks `volume_use_multipath` and `iscsi_use_multipath` in `nova_override.conf`, prints the full file, then prints virsh/XML VM count and any UUID mismatches; if `pf9-cindervolume-base` is running, checks `reserved_percentage` and `goodness_function` in `cinder.conf` |
-| 11 | **OVS bridges** | Lists all OVS bridges, their IPv4 addresses, and physical uplink ports (skips `patch`/`internal` types; lists all ports for `br-int`) |
-| 12 | **`/etc/hosts`** | Prints a red advisory to review SVM FQDN/IP mappings, then prints full `/etc/hosts` contents |
+| 10 | **PF9 packages** | `dpkg -l` presence check for 16 PF9/OVN packages: `openvswitch-common`, `openvswitch-switch`, `ovn-common`, `ovn-host`, `pf9-cindervolume-base`, `pf9-cindervolume-config`, `pf9-comms`, `pf9-glance-role`, `pf9-ha-slave`, `pf9-hostagent`, `pf9-ip-discovery`, `pf9-neutron-base`, `pf9-neutron-ovn-controller`, `pf9-neutron-ovn-metadata-agent`, `pf9-ostackhost`, `python3-openvswitch` |
+| 11 | **PF9 services** | `systemctl` status for 13 PF9 services; if `pf9-ha-slave` is absent, additionally reports `pf9-remote-write` status; if `pf9-ostackhost` is running, checks `volume_use_multipath` and `iscsi_use_multipath` in `nova_override.conf`, prints the full file, then prints virsh/XML VM count and any UUID mismatches; if `pf9-cindervolume-base` is running, checks `reserved_percentage` and `goodness_function` in `cinder.conf` |
+| 12 | **OVS bridges** | Lists all OVS bridges, their IPv4 addresses, and physical uplink ports (skips `patch`/`internal` types; lists all ports for `br-int`) |
+| 12 | **`/etc/hosts`** *(also labeled 12 in script)* | Prints a red advisory to review SVM FQDN/IP mappings, then prints full `/etc/hosts` contents |
 | 13 | **Multipath orphans** *(check-mpath-orphan flag only)* | Builds a map of all `dm-*` devices referenced by VM XMLs in `/etc/libvirt/qemu/`; any multipath device not in that map is flagged as an orphan (leftover from a deleted/detached VM); additionally scans every device stanza for `failed`/`faulty` path lines and reports `[ FAIL ]` regardless of VM association |
 | 14 | **VM disk multipath** *(list-vm-mpath flag only)* | For each running VM, retrieves its UUID and DM-* block devices (via `virsh domblklist`, with XML fallback); pre-parses `multipath -ll` once into per-`dm-X` maps and classifies each device as `active` (all paths up), `degraded` (some paths up), or `dead` (no active paths) |
 | 15 | **Virsh liveness** | Runs `virsh list --all` with a 10 s timeout; on timeout or error, scans for defunct/zombie qemu processes, resolves their VM UUID via cmdline or `/var/run/libvirt/qemu/*.pid` files, then prints the full `multipath -ll` stanza for each DM disk belonging to the zombie VM |
@@ -317,6 +318,7 @@ sudo ./hostInfo-check.sh check-sudoers
              pf9-vmha-agent (/etc/sudoers.d/pf9-vmha-agent)
 ...
 ```
+
 ```bash
 # Check for orphaned or faulty multipath devices
 sudo ./hostInfo-check.sh check-mpath-orphan
