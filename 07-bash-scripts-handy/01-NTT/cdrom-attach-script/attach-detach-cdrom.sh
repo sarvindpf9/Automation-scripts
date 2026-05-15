@@ -28,6 +28,8 @@ usage() {
 Usage:
   $(basename "$0") --action attach { --vm-ip <IP> | --vm-name <NAME> } --user <SSH_USER> \
                     --tenant <TENANT_NAME> --image-uuid <UUID> [--image-uuid2 <UUID>]
+  $(basename "$0") --action attach { --vm-ip <IP> | --vm-name <NAME> } --user <SSH_USER> \
+                    --tenant <TENANT_NAME> --iso-dir <PATH> --iso-name <FILE> [--iso-name2 <FILE>]
   $(basename "$0") --action detach { --vm-ip <IP> | --vm-name <NAME> } --user <SSH_USER> \
                     --tenant <TENANT_NAME> [--device <DEV>]
 
@@ -37,8 +39,12 @@ Options:
   --vm-name      Nova instance name of the target VM  (mutually exclusive with --vm-ip)
   --user         SSH username for the hypervisor  (required)
   --tenant       OpenStack project/tenant name used when resolving the VM by IP  (required)
-  --image-uuid   Glance image UUID to attach  (required for attach)
+  --image-uuid   Glance image UUID to attach  (required for Glance mode; mutually exclusive with --iso-dir)
   --image-uuid2  Second Glance image UUID  (optional, attach only, max 2 total)
+  --iso-dir      Absolute path to a directory on the hypervisor containing ISO files
+                 (mutually exclusive with --image-uuid)
+  --iso-name     ISO filename within --iso-dir to attach  (required with --iso-dir)
+  --iso-name2    Second ISO filename within --iso-dir  (optional, max 2 total)
   --device       Device name to detach (e.g. sdm); detach only. Omit to detach all CDROMs.
   --nfs-mount    Path to the NFS Glance mount on the hypervisor (default: /var/opt/imagelibrary/data/glance)
   --virsh-as-root  Run virsh attach-disk via 'sudo su -' (full root login shell). Use when
@@ -55,6 +61,9 @@ SSH_USER=""
 TENANT=""
 IMAGE_UUID1=""
 IMAGE_UUID2=""
+ISO_DIR=""
+ISO_NAME1=""
+ISO_NAME2=""
 DETACH_DEV=""
 VIRSH_AS_ROOT=false
 NFS_GLANCE_MOUNT_ARG=""
@@ -70,6 +79,9 @@ while [[ $# -gt 0 ]]; do
     --tenant)      TENANT="$2";      shift 2 ;;
     --image-uuid)  IMAGE_UUID1="$2"; shift 2 ;;
     --image-uuid2) IMAGE_UUID2="$2"; shift 2 ;;
+    --iso-dir)     ISO_DIR="$2";     shift 2 ;;
+    --iso-name)    ISO_NAME1="$2";   shift 2 ;;
+    --iso-name2)   ISO_NAME2="$2";   shift 2 ;;
     --device)         DETACH_DEV="$2";       shift 2 ;;
     --nfs-mount)      NFS_GLANCE_MOUNT_ARG="$2"; shift 2 ;;
     --virsh-as-root)  VIRSH_AS_ROOT=true;   shift ;;
@@ -93,8 +105,24 @@ done
 [[ "$ACTION" != "attach" && "$ACTION" != "detach" ]] && {
   echo "ERROR: --action must be 'attach' or 'detach'" >&2; usage
 }
-[[ "$ACTION" == "attach" && -z "$IMAGE_UUID1" ]] && {
-  echo "ERROR: --image-uuid is required for attach" >&2; usage
+# Glance mode and local ISO mode are mutually exclusive
+[[ -n "$IMAGE_UUID1" && -n "$ISO_DIR" ]] && {
+  echo "ERROR: --image-uuid and --iso-dir are mutually exclusive" >&2; usage
+}
+# For attach, require either Glance UUID or local ISO dir+name
+if [[ "$ACTION" == "attach" ]]; then
+  if [[ -z "$IMAGE_UUID1" && -z "$ISO_DIR" ]]; then
+    echo "ERROR: --image-uuid or (--iso-dir + --iso-name) is required for attach" >&2; usage
+  fi
+  if [[ -n "$ISO_DIR" && -z "$ISO_NAME1" ]]; then
+    echo "ERROR: --iso-name is required when --iso-dir is specified" >&2; usage
+  fi
+fi
+[[ -n "$ISO_NAME1" && -z "$ISO_DIR" ]] && {
+  echo "ERROR: --iso-name requires --iso-dir" >&2; usage
+}
+[[ -n "$ISO_NAME2" && -z "$ISO_DIR" ]] && {
+  echo "ERROR: --iso-name2 requires --iso-dir" >&2; usage
 }
 [[ "$ACTION" == "attach" && -n "$DETACH_DEV" ]] && {
   echo "ERROR: --device is only valid with --action detach" >&2; usage
@@ -271,6 +299,24 @@ check_image_exists() {
   echo "  [OK] Image ${image_uuid} status: ${status}"
 }
 
+# Verify a local ISO file exists on the hypervisor at the given directory path.
+check_local_iso() {
+  local hv_ip="$1" user="$2" iso_dir="$3" iso_name="$4"
+  local iso_path="${iso_dir}/${iso_name}"
+
+  if ! ssh_run "$hv_ip" "$user" "[ -d '${iso_dir}' ]" 2>/dev/null; then
+    echo "PRE-CHECK FAILED: Directory '${iso_dir}' not found on hypervisor ${hv_ip}." >&2
+    return 1
+  fi
+  echo "  [OK] Directory ${iso_dir} exists on ${hv_ip}."
+
+  if ! ssh_run "$hv_ip" "$user" "[ -f '${iso_path}' ]" 2>/dev/null; then
+    echo "PRE-CHECK FAILED: ISO '${iso_name}' not found in '${iso_dir}' on hypervisor ${hv_ip}." >&2
+    return 1
+  fi
+  echo "  [OK] ISO ${iso_name} found at ${iso_path} on ${hv_ip}."
+}
+
 # Verify the hypervisor is reachable via ICMP and SSH.
 check_hypervisor_reachable() {
   local hv_ip="$1" user="$2"
@@ -379,21 +425,19 @@ remote_next_free_dev() {
 do_attach() {
   local hv_ip="$1" user="$2" instance_uuid="$3" domain="$4"
   shift 4
-  local image_uuids=("$@")  # 1 or 2 UUIDs passed as remaining args
+  local iso_paths=("$@")  # 1 or 2 full ISO paths on the hypervisor
   local attached=0
 
-  for image_uuid in "${image_uuids[@]}"; do
-    local iso_path="${NFS_GLANCE_MOUNT}/${image_uuid}"
-
+  for iso_path in "${iso_paths[@]}"; do
     # Verify ISO is accessible on the hypervisor before attempting attach.
-    # When --virsh-as-root is set, run the check as root to avoid NFS permission
+    # When --virsh-as-root is set, run the check as root to avoid NFS/permission
     # visibility issues for the SSH user.
     local file_check_cmd="[ -f '${iso_path}' ]"
     if [[ "$VIRSH_AS_ROOT" == true ]]; then
       file_check_cmd="sudo su - -c \"[ -f '${iso_path}' ]\""
     fi
     if ! ssh_run "$hv_ip" "$user" "$file_check_cmd"; then
-      echo "ERROR: Glance image not found on NFS at ${iso_path} on ${hv_ip}" >&2
+      echo "ERROR: ISO not found at ${iso_path} on ${hv_ip}" >&2
       return 1
     fi
 
@@ -412,7 +456,6 @@ do_attach() {
 
     echo "Attached successfully."
     echo "  INSTANCE=${instance_uuid}"
-    echo "  GLANCE_IMAGE=${image_uuid}"
     echo "  DOMAIN=${domain}"
     echo "  DEVICE=/dev/${target_dev}"
     echo "  ISO=${iso_path}"
@@ -497,9 +540,22 @@ echo "Hypervisor: ${HV_HOST} (${HV_IP})"
 # 3. Pre-checks
 case "$ACTION" in
   attach)
-    precheck_images=("$IMAGE_UUID1")
-    [[ -n "$IMAGE_UUID2" ]] && precheck_images+=("$IMAGE_UUID2")
-    run_prechecks "$HV_IP" "$SSH_USER" "$INSTANCE_UUID" "${precheck_images[@]}"
+    if [[ -n "$ISO_DIR" ]]; then
+      # Local ISO mode: VM and hypervisor checks, then verify dir+files on the hypervisor
+      run_prechecks "$HV_IP" "$SSH_USER" "$INSTANCE_UUID"
+      local_failed=0
+      check_local_iso "$HV_IP" "$SSH_USER" "$ISO_DIR" "$ISO_NAME1" || local_failed=1
+      [[ -n "$ISO_NAME2" ]] && { check_local_iso "$HV_IP" "$SSH_USER" "$ISO_DIR" "$ISO_NAME2" || local_failed=1; }
+      if [[ "$local_failed" -ne 0 ]]; then
+        echo "One or more ISO pre-checks failed. Aborting." >&2
+        exit 1
+      fi
+    else
+      # Glance mode: also validates each UUID exists and is active in Glance
+      precheck_images=("$IMAGE_UUID1")
+      [[ -n "$IMAGE_UUID2" ]] && precheck_images+=("$IMAGE_UUID2")
+      run_prechecks "$HV_IP" "$SSH_USER" "$INSTANCE_UUID" "${precheck_images[@]}"
+    fi
     ;;
   detach)
     run_prechecks "$HV_IP" "$SSH_USER" "$INSTANCE_UUID"
@@ -514,9 +570,14 @@ echo ""
 # 5. Execute requested action
 case "$ACTION" in
   attach)
-    image_list=("$IMAGE_UUID1")
-    [[ -n "$IMAGE_UUID2" ]] && image_list+=("$IMAGE_UUID2")
-    do_attach "$HV_IP" "$SSH_USER" "$INSTANCE_UUID" "$DOMAIN" "${image_list[@]}"
+    if [[ -n "$ISO_DIR" ]]; then
+      iso_list=("${ISO_DIR}/${ISO_NAME1}")
+      [[ -n "$ISO_NAME2" ]] && iso_list+=("${ISO_DIR}/${ISO_NAME2}")
+    else
+      iso_list=("${NFS_GLANCE_MOUNT}/${IMAGE_UUID1}")
+      [[ -n "$IMAGE_UUID2" ]] && iso_list+=("${NFS_GLANCE_MOUNT}/${IMAGE_UUID2}")
+    fi
+    do_attach "$HV_IP" "$SSH_USER" "$INSTANCE_UUID" "$DOMAIN" "${iso_list[@]}"
     ;;
   detach)
     do_detach "$HV_IP" "$SSH_USER" "$INSTANCE_UUID" "$DOMAIN" "$DETACH_DEV"
