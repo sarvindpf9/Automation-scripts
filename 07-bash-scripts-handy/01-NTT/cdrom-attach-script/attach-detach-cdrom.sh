@@ -446,7 +446,7 @@ do_attach() {
 
     echo "Attaching ${iso_path} to domain ${domain} as ${target_dev} ..."
     local virsh_cmd="virsh attach-disk '${domain}' '${iso_path}' '${target_dev}' \
-         --type cdrom --mode readonly --driver qemu --subdriver raw --live"
+         --type cdrom --mode readonly --targetbus scsi --driver qemu --subdriver raw --live"
     if [[ "$VIRSH_AS_ROOT" == true ]]; then
       # Run virsh inside a full root login-shell when plain sudo lacks the required environment
       ssh_run "$hv_ip" "$user" "sudo su - -c \"${virsh_cmd}\""
