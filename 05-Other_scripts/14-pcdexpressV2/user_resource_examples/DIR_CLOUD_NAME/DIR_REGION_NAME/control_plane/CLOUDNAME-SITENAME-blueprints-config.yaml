@@ -1,0 +1,45 @@
+prod:
+  url: 'https://<infra-du-region>.app.staging-pcd.platform9.com'
+  cloud: <cloud name>
+  blueprints:
+    titan:
+      name: region2_demo
+      networkingType: ovn
+      enableDistributedRouting: true
+      dnsDomainName: sa_region2
+      virtualNetworking:
+        enabled: true
+        underlayType: geneve
+        vnidRange: '1:65535'
+      imageLibraryStorage: diraname/label
+      imageLibrarySharedStorage: true
+      vmStorage: /opt/data/instances/
+      storageBackends:
+        nfs_type:
+          nfs-mount_test:
+            config:
+              volumes_dir: ""
+              nfs_mount_points: ""
+              nfs_mount_options: 'vers=3,proto=tcp,lookupcache=pos,nolock,noacl'
+              nfs_snapshot_support: true
+              nas_secure_file_operations: false
+              nas_secure_file_permissions: false
+            driver: NFS
+          ceph:
+            test-backend:
+              driver: Ceph
+              config:
+                rbd_pool: libvirt-pool
+                rbd_user: ""
+                volumes_dir: ""
+                rbd_ceph_conf: /etc/ceph/ceph.conf
+                rbd_secret_uuid: ""
+                rbd_max_clone_depth: '5'
+                rbd_store_chunk_size: '4'
+                rbd_flatten_volume_from_snapshot: 'false'
+        netapp-2:
+          test-netapp:
+            driver: NetApp
+            config:
+              netappServerHostname: netapp2.example.com
+              netappLogin: admin

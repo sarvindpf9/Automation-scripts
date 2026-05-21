@@ -1,0 +1,9 @@
+---
+- hosts: localhost
+  connection: local
+  become: no
+  vars:
+    cloud: my_pcd
+  gather_facts: false
+  tasks:
+    - import_tasks: ../tasks/token.yml

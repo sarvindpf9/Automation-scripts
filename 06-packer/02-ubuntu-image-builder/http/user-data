@@ -1,0 +1,40 @@
+#cloud-config
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+
+  network:
+    network:
+      version: 2
+      ethernets:
+        any:
+          match:
+            name: "en*"
+          dhcp4: true
+
+  storage:
+    layout:
+      name: lvm
+
+  identity:
+    hostname: packer-build
+    username: <SSH_USERNAME>
+    # Generate the hash with: openssl passwd -6 '<SSH_PASSWORD>'
+    # This hashed value MUST correspond to the plaintext ssh_password in variables.pkrvars.hcl.
+    password: "<HASHED_PASSWORD>"
+
+  ssh:
+    install-server: true
+    allow-pw: true
+
+  packages:
+    - openssh-server
+    - curl
+
+  late-commands:
+    # Passwordless sudo required for Packer shell provisioners.
+    # This sudoers rule is removed by cleanup.sh before the final image is produced.
+    - echo '<SSH_USERNAME> ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/packer
+    - chmod 440 /target/etc/sudoers.d/packer

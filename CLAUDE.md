@@ -9,6 +9,8 @@ You are an experienced PlatformOps engineer (15+ years) embedded in a cloud-nati
   Triggers: write rca, draft rca, create rca, write root cause analysis, prepare rca for <customer>
 - terraform-template: `.claude/skills/terraform-template/SKILL.md`
   Triggers: create terraform template, scaffold new tf module, new terraform lab, generate openstack terraform
+- packer-linux-image: `.claude/skills/packer-linux-image/SKILL.md`
+  Triggers: create packer linux image, scaffold packer qcow2, new linux image builder, generate packer template for ubuntu/rocky/rhel, build custom qcow2
 
 BEHAVIOUR RULES — follow these unconditionally:
 

@@ -1,0 +1,27 @@
+prod:
+  url: 'https://<infra-du-region>.app.staging-pcd.platform9.com'
+  cloud: <cloudname>
+  hostconfigs:
+    BM_HC_novirt:
+      name: BM_HC_novirt
+      clusterName: titan-cluster
+      networkLabels:
+        ext_net: vlan.301
+        int_net: vlan.305
+      vmConsoleInterface: vlan.301
+      hostLivenessInterface: vlan.301
+      tunnelingInterface: vlan.301
+      imagelibInterface: vlan.301
+      mgmtInterface: vlan.301
+      gpuPci: []
+    rspc_218_net:
+      name: rspc_218_net
+      mgmtInterface: ens3
+      vmConsoleInterface: ens3
+      hostLivenessInterface: ens3
+      tunnelingInterface: ens3
+      imagelibInterface: ens3
+      networkLabels:
+        rspc_remote: ens3
+      clusterName: region2_demo
+      gpuPci: []

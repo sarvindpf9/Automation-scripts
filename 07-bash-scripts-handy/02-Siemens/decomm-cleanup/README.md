@@ -4,6 +4,61 @@ Remotely decommissions PCD nodes over SSH by running targeted cleanup steps — 
 
 ---
 
+## Decommission Workflow
+
+The steps below apply to `decomm-cleanup-v3.sh`. Run them in the order shown — deauthorisation must be allowed to propagate before decommission is triggered.
+
+### 1. Prepare the host list
+
+Create a file named `host-list` with one hostname per line:
+
+```text
+<HOSTNAME_1>
+<HOSTNAME_2>
+<HOSTNAME_3>
+```
+
+### 2. Fix fstab entries
+
+Comment out PF9-related fstab mount entries on all hosts:
+
+```bash
+./decomm-cleanup-v3.sh -f host-list -u <SSH_USER> -p '<SSH_PASSWORD>' --fix-fstab
+```
+
+### 3. Trigger deauthorisation
+
+```bash
+./decomm-cleanup-v3.sh -f host-list -u <SSH_USER> -p '<SSH_PASSWORD>' --deauth
+```
+
+Wait for deauthorisation to propagate through the PCD control plane before continuing.
+
+### 4. Unmount data paths
+
+```bash
+./decomm-cleanup-v3.sh -f host-list -u <SSH_USER> -p '<SSH_PASSWORD>' --unmount
+```
+
+### 5. Decommission
+
+```bash
+./decomm-cleanup-v3.sh -f host-list -u <SSH_USER> -p '<SSH_PASSWORD>' --decommission
+```
+
+### 6. Verify — stale directories and PF9 services
+
+Once decommission exits, run both checks to confirm the hosts are clean:
+
+```bash
+./decomm-cleanup-v3.sh -f host-list -u <SSH_USER> -p '<SSH_PASSWORD>' --check-dirs
+./decomm-cleanup-v3.sh -f host-list -u <SSH_USER> -p '<SSH_PASSWORD>' --check-pf9
+```
+
+Expected: `--check-dirs` reports all paths `[ABSENT]`; `--check-pf9` returns no installed PF9 packages.
+
+---
+
 ## `decomm-cleanup.sh`
 
 Reads a list of hosts from a file, connects to each one using username/password SSH via `sshpass`, escalates to root with `sudo`, and executes the requested cleanup steps in sequence. Steps are function-scoped and flag-driven; any combination can be run in a single invocation.

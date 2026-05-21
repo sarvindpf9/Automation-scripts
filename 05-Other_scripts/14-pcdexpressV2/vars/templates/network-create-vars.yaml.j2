@@ -1,0 +1,25 @@
+pcd:
+  prod:
+    {%- raw %}
+    cloud: "{{ cloudname }}"
+    {%- endraw %}
+    url : "{{ prod.url }}"
+    network:
+    {%- for network_name, network_data in prod.networks.items() %}
+      {{ network_name }}:
+        network:
+          name: {{ network_name }}
+          admin_state_up: {{ network_data.admin_state_up | default('up') }}
+          mtu: {{ network_data.mtu | default('1500') }}
+          shared: {{ network_data.shared | default('false') }}
+          "router:external": {{ network_data.get('router:external', false) }}
+          description: '{{ network_data.description }}'
+          port_security_enabled: {{ network_data.port_security_enabled | default('true') }}
+          is_default: {{ network_data.is_default | default('false') }}
+          "provider:network_type": "{{ network_data.get('provider:network_type', 'flat') }}"
+          "provider:physical_network": "{{ network_data.get('provider:physical_network', 'null') }}"
+          {%- if network_data.get('provider:network_type') == 'vlan' or network_data.get('provider:network_type') == 'vxlan' and 'provider:segmentation_id' in network_data %}
+          "provider:segmentation_id": {{ network_data['provider:segmentation_id'] }}
+          {%- endif %}
+    {%- endfor %}
+

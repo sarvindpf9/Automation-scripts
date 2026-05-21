@@ -1,0 +1,17 @@
+---
+- hosts: localhost
+  connection: local
+  become: no
+  vars:
+    cloud: my_pcd
+  gather_facts: false
+  tasks:
+    - import_tasks: ../tasks/token.yml
+
+    - name: Create subnets with the provided inputs
+      pf9.pcd.subnets:
+          mgmt_url: "{{ pcd.prod.url }}"
+          token: "{{ hostvars.localhost.keystone_token }}"
+          state: "present"
+          config: "{{ pcd.prod.subnets.default }}"
+        

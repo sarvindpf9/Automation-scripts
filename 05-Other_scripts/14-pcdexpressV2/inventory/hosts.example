@@ -1,0 +1,99 @@
+---
+all:
+  vars:
+    pcd:
+      prod:
+        cloud: my_pcd
+        url: https://jmiller-pcd921-sdf1.app.staging-pcd.platform9.com
+        hostconfigs:
+          hypvervisor:
+            name: hypervisor
+            mgmtInterface: ens3
+            vmConsoleInterface: ens3
+            hostLivenessInterface: ens3
+            tunnelingInterface: ens3
+            imagelibInterface: eth0
+            networkLabels:
+              physnet: ens3
+              vmnet: eth0
+        blueprints:
+          default:
+            name: default
+            networkingType: ovn
+            enableDistributedRouting: true
+            dnsDomainName: localdomain
+            virtualNetworking:
+              enabled: true
+              underlayType: vlan
+              vnidRange: 1:1000
+            vmHighAvailability:
+              enabled: false
+            autoResourceRebalancing:
+              enabled: true
+              rebalancingStrategy: ""
+              rebalancingFrequencyMins: 5
+            imageLibraryStorage: /var/lib/images|volumetype-nfs
+            vmStorage: /var/lib/instances
+            storageBackends:
+              vt-abc:
+                netapp-1:
+                  driver: NetApp
+                  config:
+                    netappServerHostname: netapp1.example.com
+                    netappLogin: admin
+                netapp-2:
+                  driver: NetApp
+                  config:
+                    netappServerHostname: netapp2.example.com
+                    netappLogin: admin
+              vt-lvm:
+                lvm-1:
+                  driver: LVM
+                  config:
+                    iscsi-interface: eth1
+          networks:
+            vmnet5:
+              name: vm-net5
+              description: "The default VM network"
+              admin_state_up: true
+              mtu: 1500
+              shared: false
+              "router:external": false
+              "provider:network_type": vlan
+              "provider:physical_network": br-phy1
+              "provider:segmentation_id": 3205
+              port_security_enabled: true
+              # the ones below are less commonly modified
+              availability_zone_hints: []
+              availability_zones: []
+              ipv4_address_scope: null
+              ipv6_address_scope: null
+              dns_domain: ""
+              tags: []
+          subnets:
+            vmnet5:
+              name: vm-net-sub
+              network_name: vm-net5
+              gateway_ip: 10.200.21.1
+              dns_nameservers:
+                - 8.8.4.4
+              allocation_pools:
+                - start: 10.200.21.50
+                  end: 10.200.21.60
+              enable_dhcp: true
+              ip_version: 4
+              cidr: 10.200.21.0/24
+
+
+pcd_prod:
+  hosts:
+    server1:
+      pcd_roles:
+        - hypervisor: {}
+        - image-library: {}
+        - persistent-storage:
+            backends:
+              - ceph
+              - glusterfs
+
+pcd_dev:

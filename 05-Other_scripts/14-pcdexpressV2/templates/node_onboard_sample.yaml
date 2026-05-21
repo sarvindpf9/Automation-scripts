@@ -1,0 +1,62 @@
+- hosts: localhost
+  connection: local
+  become: no
+  gather_facts: false
+  tasks:
+    - name: Read configuration for requested cloud
+      openstack.cloud.config:
+        clouds:
+          - "{{ cloud_name }}"
+      register: cloud_config
+      no_log: true
+    - import_tasks: ./roles/common/tasks/token.yml
+
+    - name: Find index of cloud name in cloud_config
+      set_fact:
+        cloud_index: "{{ cloud_config['clouds'] | selectattr('name', 'equalto', cloud_name) | list | first }}"
+      no_log: true
+
+    - name: Set the cloud variable
+      set_fact:
+        cloud_auth_url: "{{ cloud_config['clouds'][cloud_index | int]['config']['auth']['auth_url'] }}"
+        cloud_username: "{{ cloud_config['clouds'][cloud_index | int]['config']['auth']['username'] }}"
+        cloud_password: "{{ cloud_config['clouds'][cloud_index | int]['config']['auth']['password'] }}"
+        cloud_project_name: "{{ cloud_config['clouds'][cloud_index | int]['config']['auth']['project_name'] }}"
+        cloud_region_name: "{{ cloud_config['clouds'][cloud_index | int]['config']['region_name'] }}"
+        pcd_region_portal: "{{ pcd.url }}"
+      no_log: true
+- hosts: "{{ environment }}"
+  connection: ssh
+  gather_facts: false
+  vars:
+    excluded_roles: ""
+  tasks:
+    - name: process excluded roles as input
+      set_fact:
+        excluded_roles: "{{ excluded_roles.split(',') if excluded_roles else [] }}"
+
+    - name: Get roles for servers
+      set_fact:
+        rolenames: "{{ hostvars[inventory_hostname]['roles'] }}"
+
+    - name: export network hostconfigs names
+      set_fact:
+         hostconfig: "{{ hostvars[inventory_hostname]['hostconfigs'] }}"
+
+    - set_fact:
+        keystone_token: "{{ hostvars['global_vars'].keystone_token }}"
+      no_log: true
+
+    - set_fact:
+        cloud_name: "{{ hostvars['localhost']['cloud_region_name'] }}"
+
+    -  set_fact:
+         filtered_roles: "{{ excluded_roles.split(',') if excluded_roles else rolenames }}"
+
+    - name: Include roles for the nodes
+      include_role:
+        name: "{{ item }}"
+      loop: "{{ filtered_roles }}"
+      loop_control:
+        loop_var: item
+      when: item is string
