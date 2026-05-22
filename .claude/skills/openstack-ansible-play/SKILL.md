@@ -5,29 +5,28 @@ description: "Use this skill when the user asks to write, generate, or fix Ansib
 
 # OpenStack Ansible Play Skill
 
-## Behaviour
+## Rules
 
 - Ask only the single most-blocking unknown before producing output.
-- Never invent env-specific values (auth URLs, cloud names, project names, interface names, CIDR ranges, image names, flavor names). Use clearly marked placeholders: `<CLOUD_NAME>`, `<OS_AUTH_URL>`, `<PROJECT_NAME>`, `<IMAGE_NAME>`, etc.
-- Always use FQCN for all modules (`openstack.cloud.server`, `ansible.builtin.template`, etc.).
-- Resource-creation tasks always run on `localhost` with `connection: local`. Operations on deployed instances (post-deploy config) run over SSH in a second play.
-- Token access from any non-localhost play: `hostvars['localhost']['keystone_token']` — never assume the token is directly available on target hosts.
+- Never invent env-specific values. Use placeholders: `<CLOUD_NAME>`, `<IMAGE_NAME>`, `<FLAVOR_NAME>`, etc.
+- Always use FQCN: `openstack.cloud.server`, `ansible.builtin.template`, etc.
+- Resource-creation tasks run on `localhost` (`connection: local`). Post-deploy instance config runs over SSH in a second play.
 - Produce only the tasks the user asked for. Do not add unrequested resources.
-- **Docs are the source of truth.** Before emitting any module parameter or referencing a return value, verify it against the official documentation listed in the Documentation References section below. Use `ansible-doc openstack.cloud.<module>` locally to confirm parameter names for the exact installed collection version. Parameter names and return value keys differ between openstack.cloud major versions — never assume v1.x names apply to v2.x.
+- `| default(omit, true)` omits both undefined vars and empty strings (e.g. `keypair_name`, `availability_zone`). `| default(omit)` only omits undefined — use the two-arg form for params that may be set to `""`.
+- Declare `collections: [openstack.cloud]` at the play level; still use FQCN for `ansible.builtin.*`.
+- All `openstack.cloud.*` modules handle auth internally via `cloud: "{{ cloud_name }}"`. `tasks/token.yml` is only needed when the play also makes raw `ansible.builtin.uri` calls requiring an explicit bearer token.
+- `wait: true` is mandatory on `openstack.cloud.server` and `openstack.cloud.volume` — omitting it causes race conditions.
+- Teardown order is fixed: instances → volumes → routers → subnets → networks.
+- Before emitting any module parameter or return value key, verify with `ansible-doc openstack.cloud.<module>`. v1.x names do not apply to v2.x.
 
 ---
 
-## Documentation References
+## Module Reference
 
-These are the authoritative sources for all module parameters, return values, and version behaviour. Consult them before emitting any task or referencing any return key.
+Pinned collection: `openstack.cloud 2.2.0`
+Verify locally: `ansible-doc openstack.cloud.<module>` · `ansible-doc -l openstack.cloud | grep <type>`
 
-### openstack.cloud collection (pinned: 2.2.0)
-
-- Collection index: https://docs.ansible.com/ansible/latest/collections/openstack/cloud/index.html
-- Collection changelog (version deltas): https://github.com/openstack/ansible-collections-openstack/blob/master/CHANGELOG.rst
-- clouds.yaml / openstacksdk config: https://docs.openstack.org/openstacksdk/latest/user/config/configuration.html
-
-| Module | Official Doc |
+| Module | Doc |
 |---|---|
 | `openstack.cloud.auth` | https://docs.ansible.com/ansible/latest/collections/openstack/cloud/auth_module.html |
 | `openstack.cloud.network` | https://docs.ansible.com/ansible/latest/collections/openstack/cloud/network_module.html |
@@ -39,79 +38,64 @@ These are the authoritative sources for all module parameters, return values, an
 | `openstack.cloud.volume` | https://docs.ansible.com/ansible/latest/collections/openstack/cloud/volume_module.html |
 | `openstack.cloud.server_volume` | https://docs.ansible.com/ansible/latest/collections/openstack/cloud/server_volume_module.html |
 | `openstack.cloud.floating_ip` | https://docs.ansible.com/ansible/latest/collections/openstack/cloud/floating_ip_module.html |
+| `openstack.cloud.compute_flavor` | https://docs.ansible.com/ansible/latest/collections/openstack/cloud/compute_flavor_module.html |
+| `openstack.cloud.image` | https://docs.ansible.com/ansible/latest/collections/openstack/cloud/image_module.html |
 
-### ansible.builtin (ships with ansible-core)
+Version-sensitive changes (v1→v2); confirm before use:
 
-- Collection index: https://docs.ansible.com/ansible/latest/collections/ansible/builtin/index.html
-
-| Module | Official Doc |
+| Module | Change |
 |---|---|
-| `ansible.builtin.set_fact` | https://docs.ansible.com/ansible/latest/collections/ansible/builtin/set_fact_module.html |
-| `ansible.builtin.add_host` | https://docs.ansible.com/ansible/latest/collections/ansible/builtin/add_host_module.html |
-| `ansible.builtin.template` | https://docs.ansible.com/ansible/latest/collections/ansible/builtin/template_module.html |
-| `ansible.builtin.import_tasks` | https://docs.ansible.com/ansible/latest/collections/ansible/builtin/import_tasks_module.html |
-| `ansible.builtin.wait_for_connection` | https://docs.ansible.com/ansible/latest/collections/ansible/builtin/wait_for_connection_module.html |
-
-### Local verification (installed collection)
-
-```bash
-# Authoritative for the version actually installed — use this before referencing any parameter
-ansible-doc openstack.cloud.<module>
-
-# List all modules available in the installed collection
-ansible-doc -l openstack.cloud
-```
+| `openstack.cloud.network` | `external` may be `is_router_external` — check with `ansible-doc` |
+| `openstack.cloud.server` | Return key `openstack` (v1) → `server` (v2); single-NIC use `network:`, multi-NIC use `nics:` |
+| `openstack.cloud.floating_ip` | Return key structure changed — verify `_fip.floating_ip.floating_ip_address` |
 
 ---
 
-## Directory Structure
+## Directory Layout
 
-Every OpenStack Ansible project follows this layout. Generate all relevant files as a set — never a single file in isolation unless the user explicitly requests it.
+Generate all relevant files as a set. `tasks/` files are never run directly — always `import_tasks` from a playbook. Env-specific values live in `vars/<env>-vars.yml`, never inlined in tasks.
 
 ```
 <nn>-<slug>/
-├── ansible.cfg                      # project-scoped config (roles_path, inventory)
-├── requirements.yml                 # openstack.cloud collection pin
+├── ansible.cfg
+├── requirements.yml
 ├── inventory/
-│   ├── hosts.yml                    # static inventory (groups + hosts)
+│   ├── hosts.yml                    # populated by render_inventory after deploy
 │   └── group_vars/
-│       └── all.yml                  # vars shared across all groups
+│       └── all.yml                  # SSH connection defaults
 ├── playbooks/
-│   └── <operation>.yml             # entry-point play (deploy, teardown, validate, etc.)
+│   └── <operation>.yml             # only entry point for ansible-playbook
 ├── tasks/
-│   ├── token.yml                    # auth token retrieval — always reused, never inlined
-│   ├── network.yml                  # neutron network + subnet tasks
-│   ├── router.yml                   # router + interface tasks
-│   ├── security.yml                 # security group + rule tasks
-│   ├── compute.yml                  # nova server tasks
-│   └── storage.yml                  # cinder volume tasks
+│   ├── token.yml                    # only when raw uri calls need a bearer token
+│   ├── network.yml
+│   ├── router.yml
+│   ├── security.yml
+│   ├── compute.yml                  # single instance or bulk loop
+│   ├── flavor.yml                   # gated by create_flavor flag
+│   ├── image.yml                    # glance upload
+│   ├── storage.yml                  # separately attached data volumes
+│   └── floatingip.yml
 ├── vars/
-│   └── <env>-vars.yml              # environment-specific variable file
+│   └── <env>-vars.yml
 └── templates/
-    └── inventory.yml.j2             # Jinja2 template: rendered to inventory/hosts.yml on deploy
+    ├── cloud-init.yml.j2            # rendered via lookup() into compute.yml
+    └── inventory.yml.j2
 ```
-
-Rules:
-- `tasks/` files are **never played directly** — always `import_tasks` from within a playbook play.
-- `playbooks/<operation>.yml` is the only entry point for `ansible-playbook`.
-- `vars/<env>-vars.yml` is loaded via `vars_files:` in the playbook; never inline vars in task files.
-- `templates/*.j2` are rendered with `ansible.builtin.template` into `inventory/` or `vars/`.
-- `group_vars/all.yml` holds only cross-environment defaults. Env-specific values live in `vars/<env>-vars.yml`.
 
 ---
 
-## Canonical File Templates
+## Config Files
 
 ### `ansible.cfg`
 
 ```ini
 [defaults]
-inventory       = inventory/hosts.yml
-roles_path      = roles
+inventory        = inventory/hosts.yml
+roles_path       = roles
 collections_path = ~/.ansible/collections
-gathering       = smart
+gathering        = smart
 host_key_checking = False
-stdout_callback = yaml
+stdout_callback  = yaml
 
 [ssh_connection]
 pipelining = True
@@ -125,7 +109,7 @@ collections:
     version: "2.2.0"
 ```
 
-Install with: `ansible-galaxy collection install -r requirements.yml`
+`ansible-galaxy collection install -r requirements.yml`
 
 ### `inventory/hosts.yml`
 
@@ -138,7 +122,7 @@ all:
     os_project_name: "<PROJECT_NAME>"
   children:
     openstack_nodes:
-      hosts: {}                        # populated by template task after deploy
+      hosts: {}
 ```
 
 ### `inventory/group_vars/all.yml`
@@ -152,43 +136,81 @@ ansible_become_method: sudo
 ansible_become_user: root
 ```
 
-### `vars/<env>-vars.yml`
+---
+
+## Variables (`vars/<env>-vars.yml`)
+
+This file is the canonical input spec. Load via `vars_files:` in the playbook; never inline vars in task files.
 
 ```yaml
 ---
-cloud_name: "<CLOUD_NAME>"
-os_auth_url: "<KEYSTONE_ENDPOINT>/v3"
-os_region_name: "<REGION_NAME>"
-os_project_name: "<PROJECT_NAME>"
+# ─── Cloud Identity ────────────────────────────────────────────────────────────
+cloud_name: "<CLOUD_NAME>"             # entry in ~/.config/openstack/clouds.yaml
 
-# Network
+# ─── Network ──────────────────────────────────────────────────────────────────
 network_name: "<NETWORK_NAME>"
 subnet_name: "<SUBNET_NAME>"
 subnet_cidr: "<CIDR>"                  # e.g. 192.168.100.0/24
 subnet_gateway: "<GATEWAY_IP>"
 dns_nameservers:
   - 8.8.8.8
+router_name: "<ROUTER_NAME>"
+external_network_name: "<EXTERNAL_NET>"
 
-# Compute
-instance_name: "<INSTANCE_NAME>"
+# ─── Compute ──────────────────────────────────────────────────────────────────
+vm_base_name: "<VM_BASE_NAME>"         # prefix; instances named <base>-01, -02, …
+vm_count: 1
 image_name: "<GLANCE_IMAGE_NAME>"
 flavor_name: "<FLAVOR_NAME>"
-keypair_name: "<KEYPAIR_NAME>"
+keypair_name: ""                       # leave empty to omit keypair
+availability_zone: ""                  # leave empty for Nova scheduler to decide
 security_group_name: "<SG_NAME>"
 
-# Storage
+# ─── Storage ──────────────────────────────────────────────────────────────────
+boot_from_volume: false                # true = Cinder boot volume; false = ephemeral
 volume_size_gb: 20
-volume_type: "<VOLUME_TYPE>"           # e.g. ceph-ssd, lvm
+delete_volume_on_termination: true
+volume_name: "<VOLUME_NAME>"
+volume_type: "<VOLUME_TYPE>"           # e.g. ceph-ssd, lvm; omit for project default
+
+# ─── Optional Flavor Creation ─────────────────────────────────────────────────
+create_flavor: false
+flavor_vcpus: 2
+flavor_ram_mb: 4096
+flavor_disk_gb: 20
+flavor_is_public: true
+flavor_extra_specs: {}
+
+# ─── Image Upload ─────────────────────────────────────────────────────────────
+image_upload_name: "<IMAGE_NAME>"
+image_local_path: "<PATH_TO_IMAGE_FILE>"
+image_disk_format: qcow2
+image_container_format: bare
+image_visibility: private
+image_base_properties:
+  hw_disk_bus: scsi
+  hw_scsi_model: virtio-scsi
+  hw_machine_type: q35
+  hw_qemu_guest_agent: "yes"
+  os_require_quiesce: "yes"
+image_extra_properties: {}             # keys here override image_base_properties
+
+# ─── Cloud-init ───────────────────────────────────────────────────────────────
+cloud_init_enabled: false
+cloud_init_user: "<OS_DEFAULT_USER>"   # e.g. ubuntu, rocky, cloud-user
+cloud_init_password: ""                # leave empty for key-only auth
+cloud_init_groups: []
+cloud_init_ssh_keys: []
+cloud_init_packages: []
+cloud_init_write_files: []
+cloud_init_runcmd: []
 ```
 
 ---
 
-## Token Retrieval (`tasks/token.yml`)
+## Task Patterns
 
-Always `import_tasks` this file from the first `localhost` play. Do not inline token retrieval in any other play or task file.
-
-> Doc: https://docs.ansible.com/ansible/latest/collections/openstack/cloud/auth_module.html
-> Return value: `auth_token` (string) — verified for openstack.cloud 2.x.
+### `tasks/token.yml` — only for plays making raw `uri` calls
 
 ```yaml
 ---
@@ -198,7 +220,7 @@ Always `import_tasks` this file from the first `localhost` play. Do not inline t
   register: _auth_result
   no_log: true
 
-- name: Set keystone_token fact on localhost
+- name: Set keystone_token fact
   ansible.builtin.set_fact:
     keystone_token: "{{ _auth_result.auth_token }}"
   delegate_to: localhost
@@ -211,19 +233,11 @@ Always `import_tasks` this file from the first `localhost` play. Do not inline t
   no_log: true
 ```
 
-Token access in any subsequent play or task: `hostvars['localhost']['keystone_token']`
+Cross-play access: `hostvars['localhost']['keystone_token']`
 
-> `openstack.cloud.auth` reads credentials from `~/.config/openstack/clouds.yaml` using the `cloud_name` entry. No raw credentials are passed in the play.
+### `tasks/network.yml`
 
----
-
-## Canonical Task Patterns
-
-### Network (`tasks/network.yml`)
-
-> Doc (network): https://docs.ansible.com/ansible/latest/collections/openstack/cloud/network_module.html
-> Doc (subnet): https://docs.ansible.com/ansible/latest/collections/openstack/cloud/subnet_module.html
-> Version note: `provider_*` parameters require admin credentials. `external` maps to `is_router_external` in the Neutron API — verify the parameter name for the installed collection version with `ansible-doc openstack.cloud.network`.
+> `provider_*` params require admin credentials. Verify `external` vs `is_router_external` for installed version.
 
 ```yaml
 ---
@@ -253,10 +267,7 @@ Token access in any subsequent play or task: `hostvars['localhost']['keystone_to
   register: _subnet
 ```
 
-### Router (`tasks/router.yml`)
-
-> Doc: https://docs.ansible.com/ansible/latest/collections/openstack/cloud/router_module.html
-> `network` = external gateway network name or ID. `interfaces` = list of subnet names or IDs to attach as internal ports.
+### `tasks/router.yml`
 
 ```yaml
 ---
@@ -271,11 +282,7 @@ Token access in any subsequent play or task: `hostvars['localhost']['keystone_to
   register: _router
 ```
 
-### Security Group (`tasks/security.yml`)
-
-> Doc (security_group): https://docs.ansible.com/ansible/latest/collections/openstack/cloud/security_group_module.html
-> Doc (security_group_rule): https://docs.ansible.com/ansible/latest/collections/openstack/cloud/security_group_rule_module.html
-> `security_group` in the rule task accepts the group name or ID. `protocol` must be a string matching the Neutron protocol list (tcp, udp, icmp, etc.).
+### `tasks/security.yml`
 
 ```yaml
 ---
@@ -306,10 +313,11 @@ Token access in any subsequent play or task: `hostvars['localhost']['keystone_to
     direction: ingress
 ```
 
-### Compute (`tasks/compute.yml`)
+### `tasks/compute.yml`
 
-> Doc: https://docs.ansible.com/ansible/latest/collections/openstack/cloud/server_module.html
-> Return value: `_server.server` (dict) — key is `server` in openstack.cloud 2.x. Fixed IP is at `_server.server.access_ipv4`. Verify return structure with `ansible-doc openstack.cloud.server` for the installed version before referencing nested keys.
+> Return key is `server` in openstack.cloud 2.x (was `openstack` in 1.x). Fixed IP: `_server.server.access_ipv4`.
+
+**Single instance:**
 
 ```yaml
 ---
@@ -320,11 +328,12 @@ Token access in any subsequent play or task: `hostvars['localhost']['keystone_to
     name: "{{ instance_name }}"
     image: "{{ image_name }}"
     flavor: "{{ flavor_name }}"
-    key_name: "{{ keypair_name }}"
+    key_name: "{{ keypair_name | default(omit, true) }}"
     network: "{{ network_name }}"
+    availability_zone: "{{ availability_zone | default(omit, true) }}"
     security_groups:
       - "{{ security_group_name }}"
-    auto_ip: "{{ assign_floating_ip | default(false) }}"
+    auto_ip: false
     wait: true
     timeout: 300
   register: _server
@@ -334,11 +343,53 @@ Token access in any subsequent play or task: `hostvars['localhost']['keystone_to
     instance_ip: "{{ _server.server.access_ipv4 }}"
 ```
 
-### Volume (`tasks/storage.yml`)
+**Bulk instances with sequential naming, boot-from-volume, and cloud-init:**
 
-> Doc (volume): https://docs.ansible.com/ansible/latest/collections/openstack/cloud/volume_module.html
-> Doc (server_volume): https://docs.ansible.com/ansible/latest/collections/openstack/cloud/server_volume_module.html
-> `size` is in GiB. `volume_type` must match an existing Cinder volume type name in the cloud; use `| default(omit)` to fall back to the project default.
+```yaml
+---
+- name: Render cloud-init user-data
+  ansible.builtin.set_fact:
+    _userdata: "{{ lookup('ansible.builtin.template', playbook_dir + '/../templates/cloud-init.yml.j2') }}"
+  when: cloud_init_enabled | bool
+
+- name: Deploy VM instances
+  openstack.cloud.server:
+    cloud: "{{ cloud_name }}"
+    state: present
+    name: "{{ vm_base_name }}-{{ '%02d' | format(item + 1) }}"
+    image: "{{ image_name }}"
+    flavor: "{{ flavor_name }}"
+    key_name: "{{ keypair_name | default(omit, true) }}"
+    network: "{{ network_name }}"
+    availability_zone: "{{ availability_zone | default(omit, true) }}"
+    boot_from_volume: "{{ boot_from_volume | bool }}"
+    volume_size: "{{ volume_size_gb if boot_from_volume | bool else omit }}"
+    terminate_volume: "{{ delete_volume_on_termination if boot_from_volume | bool else omit }}"
+    userdata: "{{ _userdata | default(omit) }}"
+    auto_ip: false
+    wait: true
+    timeout: 300
+  loop: "{{ range(vm_count | int) | list }}"
+  register: _servers
+
+- name: Build deployed instances list
+  ansible.builtin.set_fact:
+    deployed_instances: >-
+      {{ deployed_instances | default([]) +
+         [{'name': item.server.name, 'ip': item.server.access_ipv4}] }}
+  loop: "{{ _servers.results }}"
+  loop_control:
+    label: "{{ item.server.name }}"
+
+- name: Report deployed instances
+  ansible.builtin.debug:
+    msg: "{{ item.name }} → {{ item.ip }}"
+  loop: "{{ deployed_instances }}"
+  loop_control:
+    label: "{{ item.name }}"
+```
+
+### `tasks/storage.yml` — separately attached data volumes
 
 ```yaml
 ---
@@ -361,10 +412,61 @@ Token access in any subsequent play or task: `hostvars['localhost']['keystone_to
   when: instance_name is defined
 ```
 
-### Floating IP (`tasks/floatingip.yml`)
+### `tasks/flavor.yml`
 
-> Doc: https://docs.ansible.com/ansible/latest/collections/openstack/cloud/floating_ip_module.html
-> Return value: `_fip.floating_ip` (dict) — the FIP address is at `_fip.floating_ip.floating_ip_address`. Verify with `ansible-doc openstack.cloud.floating_ip` for the installed collection version.
+```yaml
+---
+- name: Create Nova flavor
+  openstack.cloud.compute_flavor:
+    cloud: "{{ cloud_name }}"
+    state: present
+    name: "{{ flavor_name }}"
+    ram: "{{ flavor_ram_mb }}"
+    vcpus: "{{ flavor_vcpus }}"
+    disk: "{{ flavor_disk_gb }}"
+    is_public: "{{ flavor_is_public | default(true) }}"
+    extra_specs: "{{ flavor_extra_specs if flavor_extra_specs else omit }}"
+  when: create_flavor | bool
+  register: _flavor
+```
+
+### `tasks/image.yml`
+
+> `image_base_properties | combine(image_extra_properties | default({}))` — keys in `image_extra_properties` win on collision.
+
+```yaml
+---
+- name: Verify image file exists
+  ansible.builtin.stat:
+    path: "{{ image_local_path }}"
+  register: _image_stat
+
+- name: Fail if image file is missing
+  ansible.builtin.fail:
+    msg: "Image file not found: {{ image_local_path }}"
+  when: not _image_stat.stat.exists
+
+- name: Upload image to Glance
+  openstack.cloud.image:
+    cloud: "{{ cloud_name }}"
+    state: present
+    name: "{{ image_upload_name }}"
+    filename: "{{ image_local_path }}"
+    disk_format: "{{ image_disk_format }}"
+    container_format: "{{ image_container_format | default('bare') }}"
+    visibility: "{{ image_visibility }}"
+    properties: "{{ image_base_properties | combine(image_extra_properties | default({})) }}"
+    wait: true
+  register: _glance_image
+
+- name: Report uploaded image
+  ansible.builtin.debug:
+    msg: "Uploaded '{{ _glance_image.image.name }}' — ID: {{ _glance_image.image.id }}, status: {{ _glance_image.image.status }}"
+```
+
+### `tasks/floatingip.yml`
+
+> Return: `_fip.floating_ip.floating_ip_address` — verify for installed version.
 
 ```yaml
 ---
@@ -382,9 +484,7 @@ Token access in any subsequent play or task: `hostvars['localhost']['keystone_to
     floating_ip: "{{ _fip.floating_ip.floating_ip_address }}"
 ```
 
-### Inventory template render (`tasks/render_inventory.yml`)
-
-Renders `templates/inventory.yml.j2` into `inventory/hosts.yml` after instances are created.
+### `tasks/render_inventory.yml`
 
 ```yaml
 ---
@@ -396,9 +496,68 @@ Renders `templates/inventory.yml.j2` into `inventory/hosts.yml` after instances 
   delegate_to: localhost
 ```
 
+### `templates/cloud-init.yml.j2`
+
+Rendered via `lookup('ansible.builtin.template', ...)` into a `set_fact`, then passed as `userdata:`. All sections are conditional.
+
+```jinja
+#cloud-config
+users:
+  - name: {{ cloud_init_user }}
+    shell: /bin/bash
+    sudo: 'ALL=(ALL) NOPASSWD:ALL'
+{% if cloud_init_groups | default([]) %}
+    groups: {{ cloud_init_groups | join(', ') }}
+{% endif %}
+{% if cloud_init_ssh_keys | default([]) %}
+    ssh_authorized_keys:
+{% for key in cloud_init_ssh_keys %}
+      - {{ key }}
+{% endfor %}
+{% endif %}
+{% if cloud_init_password | default('') %}
+
+chpasswd:
+  list: |
+    {{ cloud_init_user }}:{{ cloud_init_password }}
+  expire: false
+
+ssh_pwauth: true
+{% endif %}
+{% if cloud_init_packages | default([]) %}
+
+packages:
+{% for pkg in cloud_init_packages %}
+  - {{ pkg }}
+{% endfor %}
+package_update: true
+package_upgrade: false
+{% endif %}
+{% if cloud_init_write_files | default([]) %}
+
+write_files:
+{% for f in cloud_init_write_files %}
+  - path: {{ f.path }}
+    permissions: '{{ f.permissions | default("0644") }}'
+{% if f.owner is defined %}
+    owner: {{ f.owner }}
+{% endif %}
+    content: |
+{{ f.content | indent(6, first=True) }}
+{% endfor %}
+{% endif %}
+{% if cloud_init_runcmd | default([]) %}
+
+runcmd:
+{% for cmd in cloud_init_runcmd %}
+  - {{ cmd }}
+{% endfor %}
+{% endif %}
+```
+
 ### `templates/inventory.yml.j2`
 
-```yaml
+```jinja
 ---
 all:
   vars:
@@ -418,48 +577,50 @@ all:
 
 ## Playbook Patterns
 
-### Resource-only deploy (localhost, no SSH to instances)
-
-Use when the play only creates OpenStack resources (networks, instances, volumes).
+### Deploy (resource-only, no SSH to instances)
 
 ```yaml
 ---
+# Usage:
+#   ansible-playbook playbooks/deploy.yml
+#   ansible-playbook playbooks/deploy.yml -e vm_count=3
+#   ansible-playbook playbooks/deploy.yml -e boot_from_volume=true -e volume_size_gb=50
+#   ansible-playbook playbooks/deploy.yml -e availability_zone="nova:compute01"
+
 - hosts: localhost
   connection: local
   become: false
   gather_facts: false
+  collections:
+    - openstack.cloud
   vars_files:
     - ../vars/<ENV>-vars.yml
   tasks:
-    - ansible.builtin.import_tasks: ../tasks/token.yml
     - ansible.builtin.import_tasks: ../tasks/network.yml
     - ansible.builtin.import_tasks: ../tasks/security.yml
     - ansible.builtin.import_tasks: ../tasks/compute.yml
     - ansible.builtin.import_tasks: ../tasks/render_inventory.yml
 ```
 
-### Two-phase: resource creation + post-deploy instance config
-
-Use when instances need to be configured over SSH after creation.
+### Two-phase: resource creation + SSH config
 
 ```yaml
 ---
-# Phase 1: create resources from localhost
 - hosts: localhost
   connection: local
   become: false
   gather_facts: false
+  collections:
+    - openstack.cloud
   vars_files:
     - ../vars/<ENV>-vars.yml
   tasks:
-    - ansible.builtin.import_tasks: ../tasks/token.yml
     - ansible.builtin.import_tasks: ../tasks/network.yml
     - ansible.builtin.import_tasks: ../tasks/security.yml
     - ansible.builtin.import_tasks: ../tasks/compute.yml
     - ansible.builtin.import_tasks: ../tasks/floatingip.yml
     - ansible.builtin.import_tasks: ../tasks/render_inventory.yml
 
-# Phase 2: configure instances over SSH
 - hosts: openstack_nodes
   connection: ssh
   become: true
@@ -470,29 +631,38 @@ Use when instances need to be configured over SSH after creation.
     - name: Wait for SSH
       ansible.builtin.wait_for_connection:
         timeout: 120
-
     # add configuration tasks here
 ```
 
-### Teardown (state: absent)
+### Teardown
 
 ```yaml
 ---
+# Usage:
+#   ansible-playbook playbooks/teardown.yml
+#   ansible-playbook playbooks/teardown.yml -e vm_count=3
+#
+# boot_from_volume + delete_volume_on_termination=true: Nova removes boot volume with server.
+# delete_volume_on_termination=false: volumes survive — clean up manually:
+#   openstack volume list --long | grep <vm_base_name>
+
 - hosts: localhost
   connection: local
   become: false
   gather_facts: false
+  collections:
+    - openstack.cloud
   vars_files:
     - ../vars/<ENV>-vars.yml
   tasks:
-    - ansible.builtin.import_tasks: ../tasks/token.yml
-
-    - name: Delete instance
+    - name: Delete VM instances
       openstack.cloud.server:
         cloud: "{{ cloud_name }}"
         state: absent
-        name: "{{ instance_name }}"
+        name: "{{ vm_base_name }}-{{ '%02d' | format(item + 1) }}"
         wait: true
+        timeout: 300
+      loop: "{{ range(vm_count | int) | list }}"
 
     - name: Delete volume
       openstack.cloud.volume:
@@ -519,64 +689,17 @@ Use when instances need to be configured over SSH after creation.
         name: "{{ network_name }}"
 ```
 
-> Teardown order matters: instances → volumes → routers → subnets → networks. Never reverse this order.
-
 ---
 
-## Variable Conventions
+## Variable Reference
 
-| Variable | Where defined | Description |
+Set-fact variables (not in vars file):
+
+| Variable | Set by | Description |
 |---|---|---|
-| `cloud_name` | `group_vars/all.yml` or `vars/<env>-vars.yml` | Entry in `~/.config/openstack/clouds.yaml` |
-| `os_region_name` | `vars/<env>-vars.yml` | OpenStack region |
-| `os_project_name` | `vars/<env>-vars.yml` | Project / tenant name |
-| `keystone_token` | `set_fact` on localhost | Set by `tasks/token.yml`; cross-play via `hostvars['localhost']['keystone_token']` |
-| `network_name` | `vars/<env>-vars.yml` | Neutron network name |
-| `subnet_name` | `vars/<env>-vars.yml` | Subnet name |
-| `subnet_cidr` | `vars/<env>-vars.yml` | Subnet CIDR block |
-| `router_name` | `vars/<env>-vars.yml` | Router name |
-| `external_network_name` | `vars/<env>-vars.yml` | External / provider network for router uplink and floating IPs |
-| `security_group_name` | `vars/<env>-vars.yml` | Security group name |
-| `instance_name` | `vars/<env>-vars.yml` | Nova server name |
-| `image_name` | `vars/<env>-vars.yml` | Glance image name |
-| `flavor_name` | `vars/<env>-vars.yml` | Nova flavor name |
-| `keypair_name` | `vars/<env>-vars.yml` | Nova keypair name (must already exist in the project) |
-| `volume_name` | `vars/<env>-vars.yml` | Cinder volume name |
-| `volume_size_gb` | `vars/<env>-vars.yml` | Volume size in GB |
-| `volume_type` | `vars/<env>-vars.yml` | Cinder volume type; omit to use project default |
-| `instance_ip` | `set_fact` after server task | Fixed IP of the instance; set in `tasks/compute.yml` |
-| `floating_ip` | `set_fact` after floating IP task | FIP address; set in `tasks/floatingip.yml` |
+| `keystone_token` | `tasks/token.yml` | Bearer token; access cross-play via `hostvars['localhost']['keystone_token']` |
+| `deployed_instances` | bulk compute loop | List of `{name, ip}` dicts |
+| `instance_ip` | single-instance compute task | Fixed IP of the instance |
+| `floating_ip` | `tasks/floatingip.yml` | Floating IP address |
 
----
-
-## Constraints
-
-- Never hardcode credentials, passwords, or auth URLs in task files or playbooks — they belong in `clouds.yaml` and are referenced only via `cloud_name`.
-- `tasks/token.yml` must be the first `import_tasks` in any play that calls OpenStack modules not covered by the `cloud:` parameter. For all `openstack.cloud.*` modules, use `cloud: "{{ cloud_name }}"` — the token is handled by the SDK internally.
-- Teardown order is fixed: instances → volumes → routers → subnets → networks. Any other order will fail on dependency conflicts.
-- Use `state: present` / `state: absent` consistently — do not use `command:` or `uri:` to wrap OpenStack CLI or REST calls when a `openstack.cloud.*` module covers the operation.
-- Provider network parameters (`provider_network_type`, `provider_physical_network`, `provider_segmentation_id`) require admin credentials in the cloud; pass them as `| default(omit)` so the task degrades cleanly for non-admin users.
-- `ansible.builtin.template` rendering always delegates to localhost — never run it on remote hosts.
-- Do not add unrequested resources (e.g. router, floating IP) unless the user's ask implies them.
-- `wait: true` is mandatory on `openstack.cloud.server` and `openstack.cloud.volume` — omitting it causes race conditions in subsequent tasks that reference the resource.
-
-### Version-sensitive parameters
-
-openstack.cloud v2.x introduced breaking parameter and return value changes from v1.x. Before emitting any parameter from the table below, confirm it for the pinned version (2.2.0) using `ansible-doc openstack.cloud.<module>`:
-
-| Module | Known v1→v2 change | Check |
-|---|---|---|
-| `openstack.cloud.network` | `external` may be `is_router_external` in some releases | `ansible-doc openstack.cloud.network \| grep external` |
-| `openstack.cloud.server` | `network` (shorthand) vs `nics` (list of dicts) for multi-NIC | Use `network` for single-NIC; use `nics` for multi-NIC per the doc |
-| `openstack.cloud.server` | Return key `openstack` (v1) → `server` (v2) | Verify `_server.server.*` vs `_server.openstack.*` |
-| `openstack.cloud.floating_ip` | Return key structure changed in v2 | Verify `_fip.floating_ip.floating_ip_address` |
-
-### Module coverage check
-
-Before falling back to `ansible.builtin.uri` or `ansible.builtin.command` for any OpenStack operation, verify there is no `openstack.cloud.*` module covering it:
-
-```bash
-ansible-doc -l openstack.cloud | grep <resource_type>
-```
-
-Only use raw REST (`uri`) or CLI (`command`) calls when no module exists for the operation and it cannot be deferred to a post-task step using a covered module.
+All other variables live in `vars/<env>-vars.yml` — see the Variables section for the full reference.
