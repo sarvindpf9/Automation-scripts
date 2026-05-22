@@ -1,0 +1,30 @@
+---
+# Deletes all VMs created by deploy.yml for the same vm_base_name / vm_count.
+#
+# When boot_from_volume: true AND delete_volume_on_termination: true,
+# Nova removes the boot volume automatically with the server — no extra step needed.
+#
+# When boot_from_volume: true AND delete_volume_on_termination: false,
+# the boot volumes survive server deletion. Identify and clean them up manually:
+#   openstack volume list --long | grep <vm_base_name>
+#
+# Usage:
+#   ansible-playbook playbooks/teardown.yml
+#   ansible-playbook playbooks/teardown.yml -e vm_count=3
+
+- name: Teardown OpenStack VM instances
+  hosts: localhost
+  gather_facts: false
+  collections:
+    - openstack.cloud
+  vars_files:
+    - ../vars/deploy-vars.yml
+  tasks:
+    - name: Delete VM instances
+      openstack.cloud.server:
+        cloud: "{{ cloud_name }}"
+        state: absent
+        name: "{{ vm_base_name }}-{{ '%02d' | format(item + 1) }}"
+        wait: true
+        timeout: 300
+      loop: "{{ range(vm_count | int) | list }}"

@@ -1,0 +1,52 @@
+#cloud-config
+users:
+  - name: {{ cloud_init_user }}
+    shell: /bin/bash
+    sudo: 'ALL=(ALL) NOPASSWD:ALL'
+{% if cloud_init_groups | default([]) %}
+    groups: {{ cloud_init_groups | join(', ') }}
+{% endif %}
+{% if cloud_init_ssh_keys | default([]) %}
+    ssh_authorized_keys:
+{% for key in cloud_init_ssh_keys %}
+      - {{ key }}
+{% endfor %}
+{% endif %}
+{% if cloud_init_password | default('') %}
+
+chpasswd:
+  list: |
+    {{ cloud_init_user }}:{{ cloud_init_password }}
+  expire: false
+
+ssh_pwauth: true
+{% endif %}
+{% if cloud_init_packages | default([]) %}
+
+packages:
+{% for pkg in cloud_init_packages %}
+  - {{ pkg }}
+{% endfor %}
+package_update: true
+package_upgrade: false
+{% endif %}
+{% if cloud_init_write_files | default([]) %}
+
+write_files:
+{% for f in cloud_init_write_files %}
+  - path: {{ f.path }}
+    permissions: '{{ f.permissions | default("0644") }}'
+{% if f.owner is defined %}
+    owner: {{ f.owner }}
+{% endif %}
+    content: |
+{{ f.content | indent(6, first=True) }}
+{% endfor %}
+{% endif %}
+{% if cloud_init_runcmd | default([]) %}
+
+runcmd:
+{% for cmd in cloud_init_runcmd %}
+  - {{ cmd }}
+{% endfor %}
+{% endif %}

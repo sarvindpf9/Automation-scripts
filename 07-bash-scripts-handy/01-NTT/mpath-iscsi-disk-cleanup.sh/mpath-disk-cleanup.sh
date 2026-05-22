@@ -7,18 +7,24 @@ set -euo pipefail
 # ── Arg parsing ───────────────────────────────────────────────────────────────
 SHOW_ORPHANS=false
 SHOW_VM_MPATH=false
+SHOW_CLEANUP=false
+DRY_RUN=true
 OUTPUT_DIR="."
+LOG_FILE=""
 
 usage() {
     cat <<EOF
-Usage: $0 <command> [command ...] [--output-dir <dir>]
+Usage: $0 <command> [command ...] [--output-dir <dir>] [--execute]
 
 Commands (at least one required):
   orphans     Report multipath devices not referenced by any VM XML
   vm-mpath    Report per-VM DM disk multipath state
+  cleanup     Remove orphaned mpath maps and their underlying SCSI paths
+              (requires orphans; dry-run by default — add --execute to apply)
 
 Options:
   --output-dir <dir>   Write output files to <dir> (default: current directory)
+  --execute            Arm live removal for the cleanup command (default: dry-run)
   -h | --help          Show this help
 
 Output files written to OUTPUT_DIR:
@@ -32,7 +38,9 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         orphans)       SHOW_ORPHANS=true ;;
         vm-mpath)      SHOW_VM_MPATH=true ;;
+        cleanup)       SHOW_CLEANUP=true ;;
         --output-dir)  shift; OUTPUT_DIR="$1" ;;
+        --execute)     DRY_RUN=false ;;
         -h|--help)     usage ;;
         *)
             echo "Unknown argument: $1" >&2
@@ -42,8 +50,13 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-if [[ "$SHOW_ORPHANS" == false && "$SHOW_VM_MPATH" == false ]]; then
-    echo "ERROR: specify at least one command (orphans | vm-mpath)" >&2
+if [[ "$SHOW_ORPHANS" == false && "$SHOW_VM_MPATH" == false && "$SHOW_CLEANUP" == false ]]; then
+    echo "ERROR: specify at least one command (orphans | vm-mpath | cleanup)" >&2
+    usage
+fi
+
+if [[ "$SHOW_CLEANUP" == true && "$SHOW_ORPHANS" == false ]]; then
+    echo "ERROR: cleanup requires orphans to be specified (e.g. $0 orphans cleanup)" >&2
     usage
 fi
 
@@ -56,12 +69,19 @@ BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
-OK()   { printf "  ${GREEN}[ OK ]${NC}  %s\n" "$*"; }
-FAIL() { printf "  ${RED}[ FAIL ]${NC}  %s\n" "$*"; }
-WARN() { printf "  ${YELLOW}[ WARN ]${NC}  %s\n" "$*"; }
-INFO() { printf "  ${DIM}         ${NC}  %s\n" "$*"; }
+OK()   { printf "  ${GREEN}[ OK ]${NC}  %s\n" "$*";    log_to_file "[ OK ]   $*"; }
+FAIL() { printf "  ${RED}[ FAIL ]${NC}  %s\n" "$*";  log_to_file "[ FAIL ] $*"; }
+WARN() { printf "  ${YELLOW}[ WARN ]${NC}  %s\n" "$*"; log_to_file "[ WARN ] $*"; }
+INFO() { printf "  ${DIM}         ${NC}  %s\n" "$*"; log_to_file "         $*"; }
 
-section() { printf "\n${CYAN}${BOLD}━━━  %-30s━━━${NC}\n" "$1 "; }
+section() { printf "\n${CYAN}${BOLD}━━━  %-30s━━━${NC}\n" "$1 "; log_to_file "━━━  $1 ━━━"; }
+
+# ── Logger ────────────────────────────────────────────────────────────────────
+# Appends a timestamped plain-text line to LOG_FILE. No-op when LOG_FILE is unset.
+log_to_file() {
+    [[ -z "$LOG_FILE" ]] && return 0
+    printf "[%s] %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE" 2>/dev/null || true
+}
 
 # ── Global mpath tables (populated by parse_multipath_ll) ─────────────────────
 declare -A mp_map_name=()   # dm-X  → alias/WWID
@@ -170,6 +190,85 @@ check_dm_host_usage() {
     return 0
 }
 
+# ── report_dm_host_usage ─────────────────────────────────────────────────────
+# Prints one INFO line per consumer found on this host.
+# Returns 0 if no consumers exist (safe to queue for cleanup),
+# 1 if any consumer was found (device is actively used).
+report_dm_host_usage() {
+    local dm="$1"   # e.g. dm-3
+    local map="$2"  # mpath alias or WWID
+    local consumed=0
+
+    # Mounted filesystem
+    local mnt
+    mnt=$(awk -v dm="/dev/${dm}" -v mp="/dev/mapper/${map}" \
+        '$1==dm||$1==mp{print $2}' /proc/mounts 2>/dev/null | head -1 || true)
+    if [[ -n "$mnt" ]]; then
+        INFO "  [HOST] mounted at: $mnt"
+        consumed=1
+    fi
+
+    # Sysfs holders (LVM LVs, MD arrays stacked on top).
+    # Verify each holder is live in /dev — sysfs entries can persist as stale
+    # after a device is torn down without a clean holder release.
+    local holders_dir="/sys/block/${dm}/holders"
+    if [[ -d "$holders_dir" ]]; then
+        local holder
+        while IFS= read -r holder; do
+            [[ -z "$holder" ]] && continue
+            if dmsetup info "$holder" >/dev/null 2>&1; then
+                INFO "  [HOST] sysfs holder: $holder"
+                consumed=1
+            else
+                INFO "  [HOST] stale sysfs holder (device gone): $holder — ignored"
+            fi
+        done < <(ls "$holders_dir" 2>/dev/null || true)
+    fi
+
+    # LVM physical volume
+    if command -v pvs >/dev/null 2>&1; then
+        if pvs "/dev/${dm}" >/dev/null 2>&1; then
+            local vg
+            vg=$(pvs --noheadings -o vg_name "/dev/${dm}" 2>/dev/null \
+                | awk '{$1=$1; print}' | head -1 || true)
+            if [[ -n "$vg" ]]; then
+                INFO "  [HOST] LVM PV — VG: $vg"
+            else
+                INFO "  [HOST] LVM PV — orphan PV (no VG assigned)"
+            fi
+            consumed=1
+        fi
+    fi
+
+    # MD RAID member
+    if grep -qsE "\b${dm}\b" /proc/mdstat 2>/dev/null; then
+        local md_arr
+        md_arr=$(grep -E "\b${dm}\b" /proc/mdstat | awk '{print $1}' | head -1 || true)
+        INFO "  [HOST] MD RAID member: ${md_arr:-unknown array}"
+        consumed=1
+    fi
+
+    # Open file descriptors — lsof preferred, fuser as fallback
+    if command -v lsof >/dev/null 2>&1; then
+        local procs
+        procs=$(lsof "/dev/${dm}" 2>/dev/null \
+            | awk 'NR>1{print $1"(PID:"$2")"}' | sort -u | head -5 || true)
+        if [[ -n "$procs" ]]; then
+            INFO "  [HOST] open by: $(tr '\n' ' ' <<< "$procs")"
+            consumed=1
+        fi
+    elif command -v fuser >/dev/null 2>&1; then
+        local fuser_out
+        fuser_out=$(fuser "/dev/${dm}" 2>/dev/null || true)
+        if [[ -n "$fuser_out" ]]; then
+            INFO "  [HOST] fuser PIDs: $fuser_out"
+            consumed=1
+        fi
+    fi
+
+    return $consumed   # 0 = no consumers (safe), 1 = consumed (skip)
+}
+
 # ── check_multipath_orphans ───────────────────────────────────────────────────
 check_multipath_orphans() {
     section "MULTIPATH ORPHANS"
@@ -189,9 +288,12 @@ check_multipath_orphans() {
             found_issues=true
             WARN "Orphan: $map ($dm) — not referenced by any VM XML"
             while IFS= read -r l; do [[ -n "$l" ]] && INFO "  $l"; done <<< "$block"
-            # Only queue for output files if nothing else on this host consumes the device
-            if check_dm_host_usage "$dm" "$map"; then
+            # Report and gate: only queue if nothing on this host is consuming the device
+            if report_dm_host_usage "$dm" "$map"; then
+                INFO "  no host consumers — queued for cleanup"
                 collected_dms+=("$dm")
+            else
+                INFO "  skipped: device has active host consumers (see above)"
             fi
         fi
 
@@ -206,7 +308,9 @@ check_multipath_orphans() {
         fi
     done
 
-    [[ "$found_issues" == false ]] && OK "All multipath devices are VM-referenced with healthy paths"
+    if [[ "$found_issues" == false ]]; then
+        OK "All multipath devices are VM-referenced with healthy paths"
+    fi
 }
 
 # ── check_vm_disk_multipath ───────────────────────────────────────────────────
@@ -292,6 +396,8 @@ check_vm_disk_multipath() {
 
 # ── Write output files ────────────────────────────────────────────────────────
 write_output_files() {
+    section "OUTPUT FILES"
+
     if [[ ${#collected_dms[@]} -eq 0 ]]; then
         WARN "No mpath devices collected — output files not written"
         return
@@ -345,10 +451,101 @@ write_output_files() {
         printf "%s  %s\n" "$wwid" "$(tr '\n' ' ' <<< "$sd_devs" | sed 's/ $//')" >> "$assoc_file"
     done
 
-    section "OUTPUT FILES"
     printf "  %-60s  (%d entries)\n" "$ids_file"   "$(wc -l < "$ids_file"   | tr -d ' ')"
     printf "  %-60s  (%d entries)\n" "$sd_file"    "$(wc -l < "$sd_file"    | tr -d ' ')"
     printf "  %-60s  (%d entries)\n" "$assoc_file" "$(wc -l < "$assoc_file" | tr -d ' ')"
+}
+
+# ── perform_cleanup ───────────────────────────────────────────────────────────
+# Flushes each orphaned mpath map then removes its underlying SCSI path devices.
+# Operates only on collected_dms — devices already verified as orphans with no
+# active host consumers. Dry-run by default; pass --execute to arm live removal.
+perform_cleanup() {
+    local ts host mode_tag
+    ts=$(date '+%Y%m%d_%H%M%S')
+    host=$(hostname -s)
+    if [[ "$DRY_RUN" == true ]]; then mode_tag="dryrun"; else mode_tag="execute"; fi
+    mkdir -p "$OUTPUT_DIR" 2>/dev/null || true
+    LOG_FILE="${OUTPUT_DIR}/mpath-cleanup-${mode_tag}-${host}-${ts}.log"
+    : > "$LOG_FILE" 2>/dev/null || { printf "WARN: cannot create log file: %s\n" "$LOG_FILE" >&2; LOG_FILE=""; }
+
+    section "MULTIPATH CLEANUP"
+
+    if [[ ${#collected_dms[@]} -eq 0 ]]; then
+        INFO "No orphaned devices queued — nothing to clean up"
+        return
+    fi
+
+    if [[ "$DRY_RUN" == true ]]; then
+        WARN "Dry run — pass --execute to perform actual removal"
+    fi
+
+    # Deduplicate preserving insertion order (mirrors write_output_files)
+    local -A seen=()
+    local -a unique_dms=()
+    for dm in "${collected_dms[@]}"; do
+        [[ -n "${seen[$dm]:-}" ]] && continue
+        seen[$dm]=1
+        unique_dms+=("$dm")
+    done
+
+    local cleaned=0 failed=0
+
+    for dm in "${unique_dms[@]}"; do
+        local map="${mp_map_name[$dm]}"
+        local stanza="${mp_stanza[$dm]}"
+
+        local -a sd_devs=()
+        mapfile -t sd_devs < <(awk '/[0-9]+:[0-9]+:[0-9]+:[0-9]+/{
+            for (i=1;i<=NF;i++) if ($i~/^sd[a-z]+$/) print $i
+        }' <<< "$stanza" 2>/dev/null || true)
+
+        printf "\n"
+        INFO "Target: $map ($dm) — paths: ${sd_devs[*]:-none}"
+
+        # ── Step 1: flush multipath map ──────────────────────────────────────
+        if [[ "$DRY_RUN" == true ]]; then
+            INFO "  [DRY RUN] multipath -f $map"
+        else
+            if multipath -f "$map" >/dev/null 2>&1; then
+                OK "  Flushed multipath map: $map"
+            else
+                FAIL "  multipath -f $map failed — skipping SCSI path removal"
+                failed=$(( failed + 1 ))
+                continue
+            fi
+        fi
+
+        # ── Step 2: remove each underlying SCSI path device ─────────────────
+        for sd in "${sd_devs[@]}"; do
+            local delete_path="/sys/block/${sd}/device/delete"
+            if [[ "$DRY_RUN" == true ]]; then
+                INFO "  [DRY RUN] echo 1 > $delete_path"
+            else
+                if [[ -w "$delete_path" ]]; then
+                    if echo 1 > "$delete_path" 2>/dev/null; then
+                        OK "  Removed SCSI path: $sd"
+                    else
+                        FAIL "  Failed to remove SCSI path: $sd"
+                        failed=$(( failed + 1 ))
+                    fi
+                else
+                    WARN "  $sd: sysfs delete path not found — already removed?"
+                fi
+            fi
+        done
+
+        cleaned=$(( cleaned + 1 ))
+    done
+
+    printf "\n"
+    if [[ "$DRY_RUN" == false ]]; then
+        if [[ $cleaned -gt 0 ]]; then OK "Cleanup complete: $cleaned device(s) processed"; fi
+        if [[ $failed  -gt 0 ]]; then FAIL "$failed device(s) had errors — review output above"; fi
+    else
+        INFO "Dry run: ${#unique_dms[@]} device(s) would be processed — rerun with --execute to apply"
+    fi
+    if [[ -n "$LOG_FILE" ]]; then INFO "Log: $LOG_FILE"; fi
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -359,3 +556,4 @@ collect_vm_dm_map
 [[ "$SHOW_VM_MPATH" == true ]] && check_vm_disk_multipath
 
 [[ "$SHOW_ORPHANS"  == true ]] && write_output_files
+[[ "$SHOW_CLEANUP"  == true ]] && perform_cleanup

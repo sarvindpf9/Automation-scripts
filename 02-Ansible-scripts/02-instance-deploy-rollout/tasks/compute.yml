@@ -1,0 +1,46 @@
+---
+# Loops over range(vm_count) — VMs are named <vm_base_name>-01, -02, etc.
+# volume_size and terminate_volume are passed only when boot_from_volume: true;
+# the `omit` sentinel removes the parameter entirely for ephemeral-disk VMs.
+- name: Render cloud-init user-data
+  ansible.builtin.set_fact:
+    _userdata: "{{ lookup('ansible.builtin.template', playbook_dir + '/../templates/cloud-init.yml.j2') }}"
+  when: cloud_init_enabled | bool
+
+- name: Deploy VM instances
+  openstack.cloud.server:
+    cloud: "{{ cloud_name }}"
+    state: present
+    name: "{{ vm_base_name }}-{{ '%02d' | format(item + 1) }}"
+    image: "{{ image_name }}"
+    flavor: "{{ flavor_name }}"
+    key_name: "{{ keypair_name | default(omit, true) }}"
+    network: "{{ network_name }}"
+    availability_zone: "{{ availability_zone | default(omit, true) }}"
+    boot_from_volume: "{{ boot_from_volume | bool }}"
+    volume_size: "{{ volume_size_gb if boot_from_volume | bool else omit }}"
+    terminate_volume: "{{ delete_volume_on_termination if boot_from_volume | bool else omit }}"
+    userdata: "{{ _userdata | default(omit) }}"
+    auto_ip: false
+    wait: true
+    timeout: 300
+  loop: "{{ range(vm_count | int) | list }}"
+  register: _servers
+
+# Return key is `server` in openstack.cloud 2.x (was `openstack` in 1.x).
+# Verify with: ansible-doc openstack.cloud.server | grep -A5 'Return values'
+- name: Build deployed instances list
+  ansible.builtin.set_fact:
+    deployed_instances: >-
+      {{ deployed_instances | default([]) +
+         [{'name': item.server.name, 'ip': item.server.access_ipv4}] }}
+  loop: "{{ _servers.results }}"
+  loop_control:
+    label: "{{ item.server.name }}"
+
+- name: Report deployed instances
+  ansible.builtin.debug:
+    msg: "{{ item.name }} → {{ item.ip }}"
+  loop: "{{ deployed_instances }}"
+  loop_control:
+    label: "{{ item.name }}"

@@ -1,0 +1,121 @@
+---
+# ─── Cloud Identity ────────────────────────────────────────────────────────────
+# Must match an entry in ~/.config/openstack/clouds.yaml
+cloud_name: "<CLOUD_NAME>"
+
+# ─── Compute: required inputs ─────────────────────────────────────────────────
+vm_base_name: "<VM_BASE_NAME>"    # prefix; instances are named <base>-01, <base>-02, …
+vm_count: 1                        # number of VMs to spawn
+image_name: "<GLANCE_IMAGE_NAME>"
+flavor_name: "<FLAVOR_NAME>"
+keypair_name: ""              # optional — omitted from the server task when empty; set to inject an SSH keypair
+network_name: "<NETWORK_NAME>"
+
+# ─── Availability Zone ────────────────────────────────────────────────────────
+# Set to a specific AZ (e.g. "nova:compute01") to pin placement.
+# Leave as empty string ("") to let the Nova scheduler decide.
+availability_zone: ""
+
+# ─── Storage Backend ──────────────────────────────────────────────────────────
+# boot_from_volume: false  → ephemeral root disk (default)
+# boot_from_volume: true   → Cinder volume as root disk
+boot_from_volume: false
+
+# Applied only when boot_from_volume: true
+volume_size_gb: 20
+# delete_volume_on_termination: true  → volume deleted with the server
+# delete_volume_on_termination: false → volume preserved after server deletion
+delete_volume_on_termination: true
+
+# ─── Optional Flavor Creation ─────────────────────────────────────────────────
+# Set create_flavor: true to create the flavor before launching VMs.
+# If the flavor already exists with the given name, the task is idempotent.
+create_flavor: false
+
+# Required when create_flavor: true
+flavor_vcpus: 2
+flavor_ram_mb: 4096
+flavor_disk_gb: 20
+flavor_is_public: true
+
+# extra_specs dict applied to the flavor.
+# Use aggregate_instance_extra_specs:<property> keys to restrict VMs
+# to host aggregates that carry the matching metadata property.
+# Example:
+#   flavor_extra_specs:
+#     "aggregate_instance_extra_specs:storage_type": "ssd"
+#     "aggregate_instance_extra_specs:compute_class": "gpu"
+#
+# Leave as empty dict ({}) to create the flavor with no extra specs.
+flavor_extra_specs: {}
+
+# ─── Image Upload ─────────────────────────────────────────────────────────────
+# Used by playbooks/upload-image.yml only; ignored by deploy.yml / teardown.yml.
+image_upload_name: "<IMAGE_NAME>"          # name the image will have in Glance
+image_local_path: "<PATH_TO_IMAGE_FILE>"   # absolute or relative path to the local file
+
+# qcow2 | raw | vmdk | vhd | vhdx | iso
+image_disk_format: qcow2
+image_container_format: bare
+
+# public  → visible and usable by all projects
+# private → visible only within the uploading project
+image_visibility: private
+
+# Hardware and guest-agent properties applied to every upload.
+# Override individual keys via image_extra_properties; do not edit this block directly.
+image_base_properties:
+  hw_disk_bus: scsi
+  os_require_quiesce: "yes"
+  hw_qemu_guest_agent: "yes"
+  hw_scsi_model: virtio-scsi
+  hw_machine_type: q35
+
+# Additional properties merged on top of image_base_properties.
+# Keys defined here override matching keys in image_base_properties.
+image_extra_properties: {}
+# Examples:
+#   image_extra_properties:
+#     os_type: linux
+#     os_distro: ubuntu
+#
+#   image_extra_properties:
+#     os_type: windows
+#     os_distro: windows
+#     hw_video_model: vga
+
+# ─── Cloud-init / User Data ───────────────────────────────────────────────────
+# Set cloud_init_enabled: true to inject a cloud-config user-data script.
+# All keys below are ignored when cloud_init_enabled: false.
+cloud_init_enabled: false
+
+cloud_init_user: "ubuntu"          # default OS user created on first boot
+cloud_init_password: ""            # plain-text password set via chpasswd; leave empty for key-only access
+cloud_init_groups: []              # additional groups for the user (e.g. [docker, adm])
+cloud_init_ssh_keys: []            # SSH public keys injected for cloud_init_user
+
+# Packages installed on first boot (requires network access at boot time)
+cloud_init_packages: []
+# Example:
+#   cloud_init_packages:
+#     - curl
+#     - htop
+#     - python3-pip
+
+# Files written before runcmd runs
+cloud_init_write_files: []
+# Example:
+#   cloud_init_write_files:
+#     - path: /etc/myapp/config.ini
+#       permissions: '0640'
+#       owner: "root:root"
+#       content: |
+#         [settings]
+#         key = value
+
+# Shell commands run at the end of first boot (each entry is a command or argv list)
+cloud_init_runcmd: []
+# Example:
+#   cloud_init_runcmd:
+#     - systemctl enable --now myservice
+#     - "echo 'bootstrap complete' >> /var/log/cloud-init-done.log"

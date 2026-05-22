@@ -1,0 +1,27 @@
+---
+- name: Verify image file exists
+  ansible.builtin.stat:
+    path: "{{ image_local_path }}"
+  register: _image_stat
+
+- name: Fail if image file is missing
+  ansible.builtin.fail:
+    msg: "Image file not found: {{ image_local_path }}"
+  when: not _image_stat.stat.exists
+
+- name: Upload image to Glance
+  openstack.cloud.image:
+    cloud: "{{ cloud_name }}"
+    state: present
+    name: "{{ image_upload_name }}"
+    filename: "{{ image_local_path }}"
+    disk_format: "{{ image_disk_format }}"
+    container_format: "{{ image_container_format | default('bare') }}"
+    visibility: "{{ image_visibility }}"
+    properties: "{{ image_base_properties | combine(image_extra_properties | default({})) }}"
+    wait: true
+  register: _glance_image
+
+- name: Report uploaded image
+  ansible.builtin.debug:
+    msg: "Uploaded '{{ _glance_image.image.name }}' — ID: {{ _glance_image.image.id }}, status: {{ _glance_image.image.status }}, visibility: {{ _glance_image.image.visibility }}"

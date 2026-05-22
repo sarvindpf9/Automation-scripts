@@ -1,0 +1,18 @@
+---
+# Runs only when create_flavor: true.
+# If the flavor already exists with this name the task is idempotent.
+#
+# VERIFY before use: ansible-doc openstack.cloud.compute_flavor
+# Parameter names below are for openstack.cloud 2.2.0.
+- name: Create Nova flavor
+  openstack.cloud.compute_flavor:
+    cloud: "{{ cloud_name }}"
+    state: present
+    name: "{{ flavor_name }}"
+    ram: "{{ flavor_ram_mb }}"
+    vcpus: "{{ flavor_vcpus }}"
+    disk: "{{ flavor_disk_gb }}"
+    is_public: "{{ flavor_is_public | default(true) }}"
+    extra_specs: "{{ flavor_extra_specs if flavor_extra_specs else omit }}"
+  when: create_flavor | bool
+  register: _flavor

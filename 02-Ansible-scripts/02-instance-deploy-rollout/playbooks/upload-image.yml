@@ -1,0 +1,32 @@
+---
+# Uploads a local image file to Glance and sets hardware/guest-agent properties.
+#
+# Required vars (pass via -e or set in vars/deploy-vars.yml):
+#   cloud_name        — entry in ~/.config/openstack/clouds.yaml
+#   image_upload_name — name the image will have in Glance
+#   image_local_path  — absolute or relative path to the local image file
+#
+# Usage:
+#   ansible-playbook playbooks/upload-image.yml \
+#     -e cloud_name=my-cloud \
+#     -e image_upload_name=ubuntu24-lts \
+#     -e image_local_path=/tmp/ubuntu-24.04.qcow2
+#
+#   # Windows image, public visibility
+#   ansible-playbook playbooks/upload-image.yml \
+#     -e cloud_name=my-cloud \
+#     -e image_upload_name=windows2022 \
+#     -e image_local_path=/tmp/win2022.qcow2 \
+#     -e image_visibility=public \
+#     -e '{"image_extra_properties": {"os_type": "windows", "os_distro": "windows"}}'
+
+- name: Upload local image to Glance
+  hosts: localhost
+  gather_facts: false
+  collections:
+    - openstack.cloud
+  vars_files:
+    - ../vars/deploy-vars.yml
+  tasks:
+    - name: Upload image
+      ansible.builtin.import_tasks: ../tasks/image.yml
