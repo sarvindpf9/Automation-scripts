@@ -1,0 +1,3 @@
+[mcp_servers.pcd-mcp-server]
+command = "/Users/sarvind/git-local/Automation-scripts/claude-automation/hackathon-mcp-sow/.venv/bin/sow-mcp-server"
+env_vars = ["ANTHROPIC_API_KEY"]

@@ -1,0 +1,24 @@
+---
+# Usage:
+#   ansible-playbook playbooks/create-flavor.yml \
+#     -e cloud_name=sa-demo_public \
+#     -e flavor_name='m1-2C-4G-AG_ubuntu' \
+#     -e flavor_vcpus=2 \
+#     -e flavor_ram_mb=4096 \
+#     -e flavor_disk_gb=0 \
+#     -e '{"flavor_extra_specs": {"aggregate_instance_extra_specs:workload": "ubuntu"}}'
+#
+# Idempotent: if the flavor already exists with the given name it will not be recreated.
+# Credentials are read from ~/.config/openstack/clouds.yaml via the cloud_name variable.
+# All defaults live in vars/deploy-vars.yml; -e flags override at runtime.
+
+- name: Create OpenStack Nova flavor
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../vars/deploy-vars.yml
+  vars:
+    create_flavor: true
+  tasks:
+    - name: Create flavor with extra_specs
+      ansible.builtin.import_tasks: ../tasks/flavor.yml

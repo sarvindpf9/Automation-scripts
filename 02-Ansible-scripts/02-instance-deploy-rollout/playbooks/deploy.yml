@@ -4,21 +4,16 @@
 #   ansible-playbook playbooks/deploy.yml -e vm_count=3
 #   ansible-playbook playbooks/deploy.yml -e boot_from_volume=true -e volume_size_gb=50
 #   ansible-playbook playbooks/deploy.yml -e availability_zone="nova:compute01"
-#   ansible-playbook playbooks/deploy.yml -e create_flavor=true -e flavor_vcpus=4 -e flavor_ram_mb=8192
 #
+# Run playbooks/create-flavor.yml first if the flavor does not yet exist.
 # Credentials are read from ~/.config/openstack/clouds.yaml via the cloud_name variable.
 # All defaults live in vars/deploy-vars.yml; -e flags override at runtime.
 
 - name: Deploy OpenStack VM instances
   hosts: localhost
   gather_facts: false
-  collections:
-    - openstack.cloud
   vars_files:
     - ../vars/deploy-vars.yml
   tasks:
-    - name: Create flavor with extra_specs (optional)
-      ansible.builtin.import_tasks: ../tasks/flavor.yml
-
     - name: Deploy compute instances
       ansible.builtin.import_tasks: ../tasks/compute.yml

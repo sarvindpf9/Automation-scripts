@@ -1,12 +1,12 @@
 # 02-instance-deploy-rollout
 
-Ansible play set for deploying and tearing down OpenStack Nova instances with configurable storage backend, availability zone placement, optional flavor creation, and bulk rollout support.
+Ansible play set for deploying and tearing down OpenStack Nova instances with configurable storage backend, availability zone placement, and bulk rollout support. Flavor creation is a separate pre-step handled by `playbooks/create-flavor.yml`.
 
 ---
 
 ## `playbooks/deploy.yml`
 
-Entry-point playbook that optionally creates a flavor, then loops over `range(vm_count)` to spawn one or more VMs named `<vm_base_name>-01`, `<vm_base_name>-02`, etc. Credentials are read from `~/.config/openstack/clouds.yaml` via the `cloud_name` variable; no explicit auth task is required. Fixed IPs of deployed instances are printed to console output on completion.
+Entry-point playbook for VM provisioning. Loops over `range(vm_count)` to spawn one or more VMs named `<vm_base_name>-01`, `<vm_base_name>-02`, etc. Credentials are read from `~/.config/openstack/clouds.yaml` via the `cloud_name` variable; no explicit auth task is required. Fixed IPs of deployed instances are printed to console output on completion. Run `playbooks/create-flavor.yml` first if the target flavor does not already exist.
 
 **Dependencies (local):**
 
@@ -18,15 +18,14 @@ Entry-point playbook that optionally creates a flavor, then loops over `range(vm
 - Keypair named `keypair_name` must already exist in the project if provided; omit or leave empty to launch without an injected key
 - Neutron network named `network_name` must already exist
 - Glance image named `image_name` must already be uploaded
-- If `create_flavor: false`, flavor named `flavor_name` must already exist
+- Flavor named `flavor_name` must already exist — run `playbooks/create-flavor.yml` first if it does not
 
 **What it does:**
 
 1. Reads credentials from `~/.config/openstack/clouds.yaml` via `cloud: "{{ cloud_name }}"` on each module call — no explicit auth task
-2. Creates a Nova flavor with optional `extra_specs` when `create_flavor: true` (idempotent — skips if the flavor already exists)
-3. Loops over `range(vm_count)` and creates each instance; storage backend is either ephemeral disk or a Cinder volume depending on `boot_from_volume`
-4. Applies `availability_zone` to each server to pin placement; omitted entirely when set to `""` so the Nova scheduler decides
-5. Collects fixed IPs from the server results and prints each `<name> → <ip>` via debug output
+2. Loops over `range(vm_count)` and creates each instance; storage backend is either ephemeral disk or a Cinder volume depending on `boot_from_volume`
+3. Applies `availability_zone` to each server to pin placement; omitted entirely when set to `""` so the Nova scheduler decides
+4. Collects fixed IPs from the server results and prints each `<name> → <ip>` via debug output
 
 ### Setup
 
@@ -95,21 +94,6 @@ ansible-playbook playbooks/deploy.yml \
 # Deploy into a specific availability zone
 ansible-playbook playbooks/deploy.yml \
   -e availability_zone="nova:compute01"
-
-# Create a new flavor before deploying (vcpus/ram/disk required)
-ansible-playbook playbooks/deploy.yml \
-  -e create_flavor=true \
-  -e flavor_vcpus=4 \
-  -e flavor_ram_mb=8192 \
-  -e flavor_disk_gb=40
-
-# Create a flavor with host aggregate pinning via extra_specs
-ansible-playbook playbooks/deploy.yml \
-  -e create_flavor=true \
-  -e flavor_vcpus=4 \
-  -e flavor_ram_mb=8192 \
-  -e flavor_disk_gb=40 \
-  -e '{"flavor_extra_specs": {"aggregate_instance_extra_specs:storage_type": "ssd"}}'
 ```
 
 ### Examples
@@ -168,18 +152,21 @@ ansible-playbook playbooks/deploy.yml \
   -e network_name=provider-vlan1001net \
   -e availability_zone="nova:compute01"
 
-# Create a new flavor with SSD aggregate pinning, then deploy one VM
+# Two-step: create flavor with host aggregate pinning, then deploy
+ansible-playbook playbooks/create-flavor.yml \
+  -e cloud_name=my-cloud \
+  -e flavor_name=custom-4c-8g \
+  -e flavor_vcpus=4 \
+  -e flavor_ram_mb=8192 \
+  -e flavor_disk_gb=40 \
+  -e '{"flavor_extra_specs": {"aggregate_instance_extra_specs:storage_type": "ssd"}}'
+
 ansible-playbook playbooks/deploy.yml \
   -e cloud_name=my-cloud \
   -e vm_base_name=gpu \
   -e image_name=ubuntu24-lts \
   -e flavor_name=custom-4c-8g \
-  -e network_name=provider-vlan1001net \
-  -e create_flavor=true \
-  -e flavor_vcpus=4 \
-  -e flavor_ram_mb=8192 \
-  -e flavor_disk_gb=40 \
-  -e '{"flavor_extra_specs": {"aggregate_instance_extra_specs:storage_type": "ssd"}}'
+  -e network_name=provider-vlan1001net
 ```
 
 ### Variables
@@ -192,19 +179,13 @@ All variables are defined in `vars/deploy-vars.yml`. Any can be overridden at ru
 | `vm_base_name` | Yes | Name prefix; instances become `<base>-01`, `<base>-02`, … |
 | `vm_count` | No | Number of VMs to spawn (default: `1`) |
 | `image_name` | Yes | Glance image name for the root disk |
-| `flavor_name` | Yes | Nova flavor name — existing, or the name to create when `create_flavor: true` |
+| `flavor_name` | Yes | Nova flavor name; must already exist in the project — run `playbooks/create-flavor.yml` first if it does not |
 | `keypair_name` | No | Nova keypair name; must pre-exist in the project. Omit or set to `""` to launch without an injected SSH key (default: `""`) |
 | `network_name` | Yes | Neutron network name for the VM NIC |
 | `availability_zone` | No | AZ to pin VM placement (e.g. `nova:compute01`); empty string lets Nova scheduler decide (default: `""`) |
 | `boot_from_volume` | No | `true` = Cinder volume root disk; `false` = ephemeral disk (default: `false`) |
 | `volume_size_gb` | BFV only | Boot volume size in GiB (default: `20`); ignored when `boot_from_volume: false` |
 | `delete_volume_on_termination` | BFV only | `true` = Nova deletes the volume with the server; `false` = volume is preserved (default: `true`) |
-| `create_flavor` | No | `true` = create the Nova flavor before deploying VMs (default: `false`) |
-| `flavor_vcpus` | create_flavor only | vCPU count for the new flavor (default: `2`) |
-| `flavor_ram_mb` | create_flavor only | RAM in MiB for the new flavor (default: `4096`) |
-| `flavor_disk_gb` | create_flavor only | Root disk size in GiB for the new flavor (default: `20`) |
-| `flavor_is_public` | No | Whether the created flavor is publicly visible (default: `true`) |
-| `flavor_extra_specs` | No | Dict of flavor extra_specs; pass `aggregate_instance_extra_specs:<key>: <value>` to restrict VMs to host aggregates (default: `{}`) |
 | `cloud_init_enabled` | No | `true` = inject cloud-config user-data on first boot (default: `false`) |
 | `cloud_init_user` | cloud_init only | OS username created on first boot (default: `ubuntu`) |
 | `cloud_init_password` | cloud_init only | Plain-text password set via `chpasswd`; leave `""` for key-only access (default: `""`) |
@@ -293,6 +274,64 @@ cloud_init_runcmd:
 ```
 
 The `write_files` entries are written before `runcmd` runs, so services or commands that depend on a config file being present will see it in place.
+
+---
+
+## `playbooks/create-flavor.yml`
+
+Creates a Nova flavor with optional `extra_specs`. Idempotent — if a flavor with the given name already exists it will not be recreated. Intended to be run as an explicit pre-step before `playbooks/deploy.yml`.
+
+**Dependencies (local):**
+
+- `ansible-core` ≥ 2.14, `openstack.cloud` collection 2.2.0 — install with `ansible-galaxy collection install -r requirements.yml`
+- `~/.config/openstack/clouds.yaml` — must contain a valid entry matching `cloud_name`
+
+**Dependencies (OpenStack project):**
+
+- Credentials with sufficient rights to create Nova flavors in the target project
+
+**What it does:**
+
+1. Reads credentials from `~/.config/openstack/clouds.yaml` via `cloud: "{{ cloud_name }}"` — no explicit auth task
+2. Creates a Nova flavor with the specified `vcpus`, `ram`, and `disk` values
+3. Applies `flavor_extra_specs` as flavor extra_specs when the dict is non-empty; parameter is omitted entirely when `flavor_extra_specs: {}`
+
+### Create-flavor usage
+
+```bash
+# Create a basic flavor
+ansible-playbook playbooks/create-flavor.yml \
+  -e cloud_name=<CLOUD_NAME> \
+  -e flavor_name=<FLAVOR_NAME> \
+  -e flavor_vcpus=2 \
+  -e flavor_ram_mb=4096 \
+  -e flavor_disk_gb=20
+
+# Create a zero-disk flavor with host aggregate pinning (boot-from-volume use case)
+ansible-playbook playbooks/create-flavor.yml \
+  -e cloud_name=sa-demo_public \
+  -e flavor_name='m1-2C-4G-AG_ubuntu' \
+  -e flavor_vcpus=2 \
+  -e flavor_ram_mb=4096 \
+  -e flavor_disk_gb=0 \
+  -e '{"flavor_extra_specs": {"aggregate_instance_extra_specs:workload": "ubuntu"}}'
+```
+
+### Flavor variables
+
+| Variable | Required | Description |
+| ---- | -------- | ----------- |
+| `cloud_name` | Yes | Entry name in `~/.config/openstack/clouds.yaml` |
+| `flavor_name` | Yes | Name for the flavor; used as the idempotency key |
+| `flavor_vcpus` | Yes | vCPU count (default: `2`) |
+| `flavor_ram_mb` | Yes | RAM in MiB (default: `4096`) |
+| `flavor_disk_gb` | Yes | Root disk size in GiB; set to `0` for zero-disk / boot-from-volume flavors (default: `20`) |
+| `flavor_is_public` | No | `true` = flavor is visible to all projects (default: `true`) |
+| `flavor_extra_specs` | No | Dict of flavor extra_specs; use `aggregate_instance_extra_specs:<key>: <value>` to restrict VMs to matching host aggregates (default: `{}`) |
+
+### Zero-disk flavors
+
+Setting `flavor_disk_gb=0` creates a flavor with no ephemeral root disk. VMs launched with this flavor must use `boot_from_volume: true` in `playbooks/deploy.yml`; attempting to boot from image with a zero-disk flavor will fail at the Nova scheduler.
 
 ---
 
