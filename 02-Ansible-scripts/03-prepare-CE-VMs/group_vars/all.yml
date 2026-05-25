@@ -1,0 +1,35 @@
+---
+# yamllint disable rule:line-length
+# Probe IP used to identify the routed internet-facing interface.
+internet_probe_ip: "1.1.1.1"
+
+# Optional hostname to apply to the target. Leave empty to keep current hostname.
+ce_hostname: ""
+
+# Netplan target file.
+netplan_config_path: /etc/netplan/50-cloud-init.yaml
+
+# Set to an explicit interface name to bypass route-based auto-detection.
+internet_interface_name: ""
+
+# Required second interface rendered with dhcp4 disabled.
+secondary_interface_name: ens19
+
+# Set to an explicit CIDR to bypass auto-detection from `ip route get`.
+internet_interface_cidr: ""
+
+# Set to an explicit gateway to bypass the detected default gateway.
+internet_gateway: ""
+
+# Nameserver list rendered under the internet-facing interface.
+netplan_nameservers:
+  - 10.96.0.1
+
+# Static fstab entries required for CE nodes.
+ce_fstab_entries:
+  - src: 10.96.7.20:/mnt/nfsshare/glance
+    path: /var/opt/imagelibrary/data
+    line: "10.96.7.20:/mnt/nfsshare/glance      /var/opt/imagelibrary/data      nfs   vers=4,proto=tcp   0       0"
+  - src: 10.96.7.20:/mnt/nfsshare/ephemeral
+    path: /opt/data/instances
+    line: "10.96.7.20:/mnt/nfsshare/ephemeral   /opt/data/instances             nfs   vers=4,proto=tcp   0       0"

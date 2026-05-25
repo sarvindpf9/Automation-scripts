@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+state_dir="${SWTPM_STATE_DIR:-/tmp/swtpm}"
+socket_path="${SWTPM_SOCKET_PATH:-${state_dir}/swtpm-sock}"
+pid_file="${SWTPM_PID_FILE:-${state_dir}/swtpm.pid}"
+
+usage() {
+    echo "Usage: $0 {start|stop|restart|status|clean}"
+}
+
+require_swtpm() {
+    if ! command -v swtpm >/dev/null 2>&1; then
+        echo "ERROR: swtpm is not installed or not in PATH." >&2
+        exit 1
+    fi
+}
+
+is_running() {
+    [ -f "${pid_file}" ] && kill -0 "$(cat "${pid_file}")" >/dev/null 2>&1
+}
+
+start_swtpm() {
+    require_swtpm
+    mkdir -p "${state_dir}"
+
+    if is_running; then
+        echo "swtpm is already running with pid $(cat "${pid_file}")"
+        return
+    fi
+
+    rm -f "${socket_path}"
+    swtpm socket \
+        --tpm2 \
+        --tpmstate "dir=${state_dir}" \
+        --ctrl "type=unixio,path=${socket_path}" \
+        --daemon \
+        --pid "file=${pid_file}" \
+        --log "level=20"
+
+    echo "swtpm started on ${socket_path}"
+}
+
+stop_swtpm() {
+    if is_running; then
+        kill "$(cat "${pid_file}")"
+        rm -f "${pid_file}" "${socket_path}"
+        echo "swtpm stopped"
+        return
+    fi
+
+    rm -f "${pid_file}" "${socket_path}"
+    echo "swtpm is not running"
+}
+
+status_swtpm() {
+    if is_running; then
+        echo "swtpm is running with pid $(cat "${pid_file}")"
+    else
+        echo "swtpm is not running"
+        exit 1
+    fi
+}
+
+clean_swtpm() {
+    stop_swtpm
+    rm -rf "${state_dir}"
+    echo "removed ${state_dir}"
+}
+
+case "${1:-}" in
+    start)
+        start_swtpm
+        ;;
+    stop)
+        stop_swtpm
+        ;;
+    restart)
+        stop_swtpm
+        start_swtpm
+        ;;
+    status)
+        status_swtpm
+        ;;
+    clean)
+        clean_swtpm
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac

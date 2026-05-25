@@ -1,0 +1,17 @@
+network:
+  version: 2
+  ethernets:
+    {{ ce_internet_interface }}:
+      dhcp4: false
+      addresses:
+        - {{ ce_internet_cidr }}
+      nameservers:
+        addresses:
+{% for nameserver in netplan_nameservers %}
+          - {{ nameserver }}
+{% endfor %}
+      routes:
+        - to: default
+          via: {{ ce_internet_gateway }}
+    {{ secondary_interface_name }}:
+      dhcp4: false

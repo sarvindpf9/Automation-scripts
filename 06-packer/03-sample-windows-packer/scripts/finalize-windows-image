@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+raw_image_path="${1:-output-windows_builder/packer-windows_builder}"
+qcow2_image_path="${2:-output-windows_builder/packer-windows-build.qcow2}"
+tmp_dir=""
+
+cleanup() {
+    if [ -n "${tmp_dir}" ] && mountpoint -q "${tmp_dir}"; then
+        umount "${tmp_dir}"
+    fi
+
+    if [ -n "${nbd:-}" ]; then
+        qemu-nbd -d "${nbd}" >/dev/null 2>&1 || true
+    fi
+
+    if [ -n "${tmp_dir}" ] && [ -d "${tmp_dir}" ]; then
+        rmdir "${tmp_dir}" >/dev/null 2>&1 || true
+    fi
+}
+
+trap cleanup EXIT
+
+echo "Syncing ${raw_image_path}..."
+sync -f "${raw_image_path}"
+
+IMG_FMT="raw"
+source scripts/setup-nbd "${raw_image_path}"
+
+tmp_dir="$(mktemp -d /tmp/packer-windows-XXXX)"
+echo "Adding curtin hooks to ${raw_image_path}..."
+mount -t ntfs "${nbd}p4" "${tmp_dir}"
+mkdir -p "${tmp_dir}/curtin"
+cp ./curtin/* "${tmp_dir}/curtin/"
+sync -f "${tmp_dir}/curtin"
+umount "${tmp_dir}"
+qemu-nbd -d "${nbd}"
+
+echo "Converting raw image to qcow2..."
+qemu-img convert -f raw -O qcow2 "${raw_image_path}" "${qcow2_image_path}"
+rm -f "${raw_image_path}"
