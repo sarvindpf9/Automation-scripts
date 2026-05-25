@@ -1,0 +1,45 @@
+---
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - import_tasks: tasks/token.yml
+
+- hosts: pcd_prod
+  connection: ssh
+  gather_facts: true
+  tasks:
+    - import_tasks: tasks/hostid.yml
+    - name: Remove PCD Roles
+      pcd-roles:
+        mgmt_url: "{{ pcd.control_plane.url }}"
+        token: "{{ hostvars.localhost.keystone_token }}"
+        host_id: "{{ hostid }}"
+        roles: {}
+    - name: Decommission Host
+      command: cloud-ctl decommission-node
+    - name: Delete Host from PCD
+      uri:
+        url: "{{ pcd.control_plane.url }}/resmgr/v1/hosts/{{ hostid }}"
+        method: DELETE
+        headers:
+          X-Auth-Token: "{{ hostvars.localhost.keystone_token }}"
+      retries: 5
+      delay: 30
+      when: hostid != ""
+    - name: Remove OVS
+      apt:
+        pkg:
+          - openvswitch-common
+          - openvswitch-switch
+          - python3-openvswitch
+        state: absent
+
+    - name: Kill OVS
+      shell: "pkill -9 neutron || true"
+
+    - name: Purge ovs
+      shell: "dpkg --purge openvswitch-switch || true"
+
+    - name: Remove OVS
+      shell: "rm -rf /etc/openvswitch"

@@ -1,0 +1,30 @@
+all:
+  vars:
+    pcd:
+      cloud: "{{ cloud }}"
+      url: "{{ url }}"
+regions:
+  {{ cloud }}:
+    region: "{{ cloud }}"
+    environments:
+      {{ environment_name }}:
+        hosts:
+          {%- for ip, host_data in hosts.items() %}
+          {{ ip }}:
+            ansible_ssh_user: "{{ host_data.ansible_ssh_user | default('ubuntu') }}"
+            ansible_ssh_private_key_file: "{{ host_data.ansible_ssh_private_key_file | default('/path/to/default/key') }}"
+            roles:
+              {%- for role in host_data.roles %}
+              - "{{ role }}"
+              {%- endfor %}
+            {%- if 'persistent-storage' in host_data.roles %}
+            persistent_storage:
+              backends:
+                {%- if host_data.get('persistent_storage') is mapping and host_data.persistent_storage.get('backends') %}
+                {%- for backend in host_data.persistent_storage.get('backends') %}
+                - "{{ backend }}"
+                {%- endfor %}
+                {%- endif %}
+            {%- endif %}
+            hostconfigs: "{{ host_data.hostconfigs | default('') }}"
+          {%- endfor %}

@@ -1,0 +1,25 @@
+---
+- hosts: localhost
+  connection: local
+  become: no
+  vars:
+      {%- raw %}
+      cloud: "{{ cloudname }}"
+      {%- endraw %}
+  vars_files:
+      - {{ vars_files_path }}
+  gather_facts: false
+  tasks:
+    - import_tasks: ./roles/common/tasks/token.yml
+    {%- for config_name in blueprints %}
+    - name: Set default Config for {{ config_name }}     
+      pf9.pcd.blueprint:
+          state: "present"
+          {%- raw %}
+          mgmt_url: "{{ pcd.prod.url }}"
+          {%- endraw %}
+          {%- raw %}
+          token: "{{ hostvars.localhost.keystone_token }}"
+          {%- endraw %}
+          config: "{{ '{{ pcd.prod.blueprints.' + config_name + ' }}' }}"
+    {%- endfor %}

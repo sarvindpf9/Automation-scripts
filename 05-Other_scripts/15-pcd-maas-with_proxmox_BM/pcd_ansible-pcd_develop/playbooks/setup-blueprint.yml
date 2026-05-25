@@ -1,0 +1,17 @@
+---
+- hosts: localhost
+  connection: local
+  become: no
+  vars:
+    cloud: my_pcd
+  gather_facts: false
+  tasks:
+    - import_tasks: ../tasks/token.yml
+
+    - name: Set default PCD Blueprint Config
+      pf9.pcd.blueprint:
+          mgmt_url: "{{ pcd.prod.url }}"
+          token: "{{ hostvars.localhost.keystone_token }}"
+          state: "present"
+          config: "{{ pcd.prod.blueprint.default }}"
+        

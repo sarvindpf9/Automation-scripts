@@ -1,0 +1,6 @@
+hostname,architecture,mac_addresses,power_type,power_user,power_pass,power_driver,power_address,cipher_suite_id,power_boot_type,privilege_level,k_g,ip,cloud_init
+vm-storage01,amd64/generic,00:50:56:b8:b4:39,manual,,,LAN_2_0,,3,auto,ADMIN,,192.168.115.190,cloud-init_template.yaml
+vm-storage02,amd64/generic,00:50:56:b8:19:57,manual,,,LAN_2_0,,3,auto,ADMIN,,192.168.115.191,cloud-init_template.yaml
+vm-storage03,amd64/generic,00:50:56:b8:ce:48,manual,,,LAN_2_0,,3,auto,ADMIN,,192.168.115.192,cloud-init_template.yaml
+vm-storage04,amd64/generic,00:50:56:b8:b9:21,manual,,,LAN_2_0,,3,auto,ADMIN,,192.168.115.193,cloud-init_template.yaml
+

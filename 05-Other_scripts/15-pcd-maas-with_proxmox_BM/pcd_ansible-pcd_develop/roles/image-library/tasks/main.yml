@@ -1,0 +1,17 @@
+---
+#- name: Retrieve Keystone Token
+#  import_tasks: ../../common/tasks/token.yml
+
+- name: Retrieve Host ID
+  import_tasks: ../../common/tasks/hostid.yml
+
+#- name: Set Keystone Token Fact
+#  set_fact:
+#    keystone_token: "{{ hostvars['global_vars'].keystone_token }}"
+
+# for debugging
+#- name: Debug Hostvars
+#  import_tasks: debug_hostvars.yml
+
+- name: Set hypervisor Role
+  import_tasks: ./image-library.yaml

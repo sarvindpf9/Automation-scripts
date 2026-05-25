@@ -1,0 +1,5 @@
+# to be enabled only during debugging 
+#---
+#- name: Debug hostvars
+#  debug:
+#    msg: "{{ hostvars }}"

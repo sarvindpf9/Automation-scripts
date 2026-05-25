@@ -1,0 +1,33 @@
+---
+- hosts: localhost
+  connection: local
+  become: no
+  vars_files:
+    -  ../vars/cluster_blueprint_vars.yml
+  vars:
+    cloud: my_pcd
+  gather_facts: false
+  tasks:
+    - import_tasks: ../tasks/token.yml
+
+    - name: Set default PCD Blueprint Config
+      pf9.pcd.blueprint:
+        state: present
+        mgmt_url: "{{ pcd.prod.url }}"
+        token: "{{ hostvars.localhost.keystone_token }}"
+        config: "{{ pcd.prod.blueprints.default }}"
+
+    - name: Set PCD Host Config
+      pf9.pcd.hostconfig:
+        state: present
+        mgmt_url: "{{ pcd.prod.url }}"
+        token: "{{ hostvars.localhost.keystone_token }}"
+        #config: "{{ pcd.prod.hostconfigs.hypervisor }}"
+        config: "{{ pcd.prod.hostconfigs }}"
+
+    #- name: Set PCD Network
+    #  pf9.pcd.network:
+    #    state: present
+    #    mgmt_url: "{{ pcd.prod.url }}"
+    #    token: "{{ hostvars.localhost.keystone_token }}"
+    #    config: "{{ pcd.prod.blueprints.networks.default }}"

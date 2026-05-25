@@ -1,0 +1,39 @@
+all:
+  vars:
+    pcd:
+      cloud: {{ all.vars.pcd.cloud }}
+      url: "{{ all.vars.pcd.url }}"
+{%- for region_name, region_data in regions.items() %}
+{{ region_name }}:
+  vars:
+    pcd:
+      region: {{ region_data['region'] }}
+  children:
+    {%- for env_name, env_data in region_data['environments'].items() %}
+    {{ env_name }}:
+      vars:
+        environment: {{ env_name }}
+      hosts:
+        {%- for ip, host_data in env_data.hosts.items() %}
+        {{ ip }}:
+          ansible_ssh_user: "{{ host_data.ansible_ssh_user | default('ubuntu') }}"
+          ansible_ssh_private_key_file: "{{ host_data.ansible_ssh_private_key_file | default('/path/to/default/key') }}"
+          roles:
+            {%- for role in host_data.roles %}
+            - "{{ role }}"
+            {%- endfor %}
+          {%- if 'persistent-storage' in host_data.roles %}
+          persistent_storage:
+            backends:
+              {%- if host_data.get('persistent_storage', {}).get('backends') %}
+              {%- for backend in host_data['persistent_storage']['backends'] %}
+              - "{{ backend }}"
+              {%- endfor %}
+              {%- else %}
+              - "default-backend"
+              {%- endif %}
+          {%- endif %}
+          hostconfigs: "{{ host_data.hostconfigs | default('') }}"
+        {%- endfor %}
+    {% endfor %}
+{% endfor %}

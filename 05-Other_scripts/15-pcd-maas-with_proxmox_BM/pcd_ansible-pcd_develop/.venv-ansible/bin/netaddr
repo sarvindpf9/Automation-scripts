@@ -1,0 +1,7 @@
+#!/home/ubuntu/Documents/testing/git-test/pcd_ansible-pcd_develop/.venv-ansible/bin/python3
+import sys
+from netaddr.cli import main
+if __name__ == '__main__':
+    if sys.argv[0].endswith('.exe'):
+        sys.argv[0] = sys.argv[0][:-4]
+    sys.exit(main())

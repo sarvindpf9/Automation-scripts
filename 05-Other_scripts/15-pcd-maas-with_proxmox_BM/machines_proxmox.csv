@@ -1,0 +1,4 @@
+hostname,power_type,power_user,power_pass,power_address,power_token_name,power_verify_ssl,power_token_secret,power_vm_name,ip,cloud_init
+prox-vm1,proxmox,root@pam,Killzone@123,10.96.6.240,,,,500,cloud-init_test1.yaml
+prox-vm2,proxmox,root@pam,Killzone@123,10.96.6.240,,y,,501,10.96.0.200,cloud-init_test2.yaml
+

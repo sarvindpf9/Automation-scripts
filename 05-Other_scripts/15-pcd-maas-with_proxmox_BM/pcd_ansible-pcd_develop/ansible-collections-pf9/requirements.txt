@@ -1,0 +1,4 @@
+openstacksdk>=4.1
+ansible>=10.6
+requests>=2.32
+ruff>=0.8.1

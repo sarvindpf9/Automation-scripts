@@ -1,0 +1,18 @@
+---
+all:
+  vars:
+    pcd:
+      cloud: "<region>"
+      url: https://portal-region.app.staging-pcd.platform9.com/
+regions:
+  titan:
+    region: region
+    environments:
+      development:
+        hosts:
+          <ip>/<hostname>:
+            ansible_ssh_user: ubuntu
+            ansible_ssh_private_key_file: /path/ssh-hypervisior.key 
+            roles:
+              - node_onboard
+              - hypervisor

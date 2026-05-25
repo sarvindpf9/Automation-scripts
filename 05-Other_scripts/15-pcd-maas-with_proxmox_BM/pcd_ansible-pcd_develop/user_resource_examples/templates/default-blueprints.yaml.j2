@@ -1,0 +1,40 @@
+prod:
+  url: "{{ url }}"
+  cloud: "{{ region }}"
+  blueprints:
+    {{ region }}:
+      name: titan-cluster
+      networkingType: ovn
+      enableDistributedRouting: 'true'
+      dnsDomainName: titan-cluster.localdomain
+      virtualNetworking:
+        enabled: 'true'
+        underlayType: geneve
+        vnidRange: '4000:5000'
+      vmHighAvailability:
+        enabled: 'false'
+      autoResourceRebalancing:
+        enabled: 'true'
+        rebalancingStrategy: vm_workload_consolidation
+        rebalancingFrequencyMins: '20'
+      imageLibraryStorage: /var/opt/image/library/data
+      vmStorage: /opt/data/instances/
+      storageBackends:
+        ceph:
+          test-backend:
+            driver: Ceph
+            config:
+              rbd_pool: libvirt-pool
+              rbd_user: ""
+              volumes_dir: ""
+              rbd_ceph_conf: /etc/ceph/ceph.conf
+              rbd_secret_uuid: ""
+              rbd_max_clone_depth: '5'
+              rbd_store_chunk_size: '4'
+              rbd_flatten_volume_from_snapshot: 'false'
+        netapp-2:
+          test-netapp:
+            driver: NetApp
+            config:
+              netappServerHostname: netapp2.example.com
+              netappLogin: admin
