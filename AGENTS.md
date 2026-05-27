@@ -11,8 +11,12 @@ You are an experienced PlatformOps engineer (15+ years) embedded in a cloud-nati
   Triggers: create terraform template, scaffold new tf module, new terraform lab, generate openstack terraform
 - packer-linux-image: `.agents/skills/packer-linux-image/SKILL.md`
   Triggers: create packer linux image, scaffold packer qcow2, new linux image builder, generate packer template for ubuntu/rocky/rhel, build custom qcow2
+- packer-image-builder: `.agents/skills/packer-image-builder/SKILL.md`
+  Triggers: create packer template, scaffold packer qcow2, new image builder, generate packer template for windows/linux/ubuntu/debian/rocky/alma/rhel, build custom qcow2, refine packer template
 - openstack-ansible-play: `.agents/skills/openstack-ansible-play/SKILL.md`
   Triggers: write ansible play for openstack, create playbook to deploy instance, generate tasks for network/subnet/router/volume/security group, scaffold openstack ansible project, write openstack resource management play
+
+Skill precedence: for task-specific work, Codex must check and prefer matching local skills under `.agents/skills/` before using global/bundled skills, external references, or generic generation. Fall back outside `.agents/skills/` only when no local skill matches the request or the local skill is incomplete for the requested task.
 
 BEHAVIOUR RULES — follow these unconditionally:
 
@@ -59,9 +63,10 @@ BEHAVIOUR RULES — follow these unconditionally:
 ## 7. How Codex Should Operate in This Repo
 
 1. **Always read this file first.** If asked to edit code without this context, request it.
-2. **Search before writing.** Check for existing modules, roles, and utilities before generating new ones.
-3. **Flag unknowns explicitly.** If something about the environment is unclear (flavor names, VPC IDs, bucket prefixes), say so — do not invent plausible values.
-4. **Propose, don't apply.** Generate diffs and explain the impact. Do not assume approval to apply.
-5. **Minimal blast radius.** Make the smallest correct change.
-6. **Document your reasoning.** For non-obvious decisions, add an inline comment explaining why.
-7. **Test coverage is  optional.** Every new function, script, or role gets a corresponding test unless the task explicitly says otherwise.
+2. **Prefer local agent skills first.** Match the request against `.agents/skills/*/SKILL.md` and follow the relevant local skill before exploring bundled skills, global docs, internet sources, or generic templates.
+3. **Search before writing.** Check for existing modules, roles, and utilities before generating new ones.
+4. **Flag unknowns explicitly.** If something about the environment is unclear (flavor names, VPC IDs, bucket prefixes), say so — do not invent plausible values.
+5. **Propose, don't apply.** Generate diffs and explain the impact. Do not assume approval to apply.
+6. **Minimal blast radius.** Make the smallest correct change.
+7. **Document your reasoning.** For non-obvious decisions, add an inline comment explaining why.
+8. **Test coverage is  optional.** Every new function, script, or role gets a corresponding test unless the task explicitly says otherwise.

@@ -26,7 +26,7 @@ Drives an unattended Windows installation with the QEMU builder. The template us
 
 **What it does:**
 
-1. Boots the Windows ISO through QEMU/KVM with UEFI firmware from `/usr/share/OVMF/`.
+1. Boots the Windows ISO through QEMU/KVM with UEFI firmware from `/usr/share/OVMF/`. `OVMF_CODE` is attached read-only from the system path; `OVMF_VARS` is resolved from `ovmf_vars_path` when set, or the system path as a fallback. Copy `OVMF_VARS` to a local file before building so QEMU does not modify the shared system copy.
 2. Attaches `http/Autounattend.xml`, `http/logon.ps1`, and `http/rh.cer` as floppy files.
 3. Attaches `drivers.iso` as a CD-ROM for optional driver injection.
 4. Adds TPM QEMU arguments only when `enable_tpm=true`.
@@ -62,9 +62,12 @@ sudo apt-get install -y packer
 
 # Verify KVM access
 test -e /dev/kvm
+
+# Copy OVMF_VARS to a local writable file — QEMU modifies it during the build
+cp /usr/share/OVMF/OVMF_VARS_4M.fd ./OVMF_VARS_4M.fd
 ```
 
-If the Ubuntu build host is itself a VM, enable nested virtualization on the parent hypervisor before using this template.
+If the Ubuntu build host is itself a VM, enable nested virtualization on the parent hypervisor before using this template. In a nested VM environment, also set `disable_hv_evmcs=true` in `variables.pkrvars.hcl` — the outer hypervisor typically does not expose the `hv-evmcs` CPU feature to guest VMs.
 
 > **Sensitive data notice:** `http/Autounattend.xml` and `http/logon.ps1` contain a plaintext local Administrator password value. Replace it in your local working copy before production use and do not commit environment-specific credentials.
 
@@ -77,8 +80,11 @@ packer init .
 # Validate the template with the sample variables file
 packer validate -var-file=variables.pkrvars.hcl windows.pkr.hcl
 
-# Build without TPM
-sudo packer build -var-file=variables.pkrvars.hcl windows.pkr.hcl
+# Build without TPM (pass the local OVMF_VARS copy)
+sudo packer build \
+  -var-file=variables.pkrvars.hcl \
+  -var 'ovmf_vars_path=./OVMF_VARS_4M.fd' \
+  windows.pkr.hcl
 ```
 
 ```bash
@@ -105,9 +111,10 @@ sudo packer build \
 | ---- | -------- | ----------- |
 | `-var 'iso_path=<WINDOWS_ISO_PATH>'` | Yes | Path or URL to the Windows installation ISO. The template default is empty; `variables.pkrvars.hcl` carries the `<WINDOWS_ISO_PATH>` placeholder. |
 | `-var 'headless=false'` | No | Run without opening a graphical console when set to `true`. Default in the template is `false`. |
-| `-var 'disk_size=15G'` | No | Windows image disk size. Default is `15G`. |
-| `-var 'disable_hv_evmcs=false'` | No | Uses `["-cpu", "host", "-hv-evmcs"]` by default. Set to `true` to use `["-cpu", "host"]`. |
-| `-var 'ovmf_suffix=_4M'` | No | OVMF firmware filename suffix used in `/usr/share/OVMF/OVMF_CODE${var.ovmf_suffix}.ms.fd` and `/usr/share/OVMF/OVMF_VARS${var.ovmf_suffix}.fd`. Default is `_4M`. |
+| `-var 'disk_size=64G'` | No | Windows image disk size. Default is `64G`. |
+| `-var 'disable_hv_evmcs=false'` | No | Uses `-cpu host,hv-evmcs` by default. Set to `true` on nested VMs or any host where the CPU does not expose `hv-evmcs`; falls back to `-cpu host`. |
+| `-var 'ovmf_suffix=_4M'` | No | OVMF firmware filename suffix for `/usr/share/OVMF/OVMF_CODE<suffix>.ms.fd`. Default is `_4M`. |
+| `-var 'ovmf_vars_path=<PATH>'` | No | Path to a local writable copy of the OVMF_VARS firmware file. When empty, falls back to `/usr/share/OVMF/OVMF_VARS<suffix>.fd`. Always set this to a local copy to prevent QEMU modifying the shared system file. |
 | `-var 'enable_tpm=false'` | No | Adds TPM QEMU arguments when set to `true`. Start `scripts/swtpm` first. |
 | `-var 'swtpm_socket_path=/tmp/swtpm/swtpm-sock'` | No | Socket path passed to QEMU for the TPM chardev. Must match `SWTPM_SOCKET_PATH` when that environment variable is used with `scripts/swtpm`. |
 | `-var 'timeout=1h'` | No | Shutdown timeout for the Windows installer. Default is `1h`. |

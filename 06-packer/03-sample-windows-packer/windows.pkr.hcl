@@ -17,7 +17,7 @@ variable "headless" {
 
 variable "disk_size" {
   type        = string
-  default     = "15G"
+  default     = "64G"
   description = "Windows image disk size."
 }
 
@@ -37,6 +37,12 @@ variable "ovmf_suffix" {
   type        = string
   default     = "_4M"
   description = "OVMF firmware filename suffix."
+}
+
+variable "ovmf_vars_path" {
+  type        = string
+  default     = ""
+  description = "Path to a writable OVMF_VARS file. Defaults to ovmf-vars.fd in the parent directory, created by packer_pre_req.sh. Override only when using a custom location."
 }
 
 variable "enable_tpm" {
@@ -78,12 +84,17 @@ variable "qcow2_image_name" {
 locals {
   raw_image_path   = "${var.output_directory}/${var.raw_image_name}"
   qcow2_image_path = "${var.output_directory}/${var.qcow2_image_name}"
-  cpu_qemuargs     = var.disable_hv_evmcs ? [["-cpu", "host"]] : [["-cpu", "host", "-hv-evmcs"]]
+  cpu_qemuargs     = var.disable_hv_evmcs ? [["-cpu", "host"]] : [["-cpu", "host,hv-evmcs"]]
+  # path.root is the directory containing this .pkr.hcl file; ../ovmf-vars.fd is
+  # the writable copy created by packer_pre_req.sh one level up in 06-packer/.
+  # The system file at /usr/share/OVMF/ is root-owned and read-only — QEMU needs
+  # a writable VARS file to persist UEFI boot variables during the build.
+  ovmf_vars_file   = var.ovmf_vars_path != "" ? var.ovmf_vars_path : "${path.root}/../ovmf-vars.fd"
 
   base_qemuargs = [
     ["-serial", "stdio"],
     ["-drive", "if=pflash,format=raw,id=ovmf_code,readonly=on,file=/usr/share/OVMF/OVMF_CODE${var.ovmf_suffix}.ms.fd"],
-    ["-drive", "if=pflash,format=raw,id=ovmf_vars,file=/usr/share/OVMF/OVMF_VARS${var.ovmf_suffix}.fd"],
+    ["-drive", "if=pflash,format=raw,id=ovmf_vars,file=${local.ovmf_vars_file}"],
     ["-drive", "file=${local.raw_image_path},format=raw"],
     ["-display", "vnc=:1,password=off"],
     ["-device", "qxl-vga"],

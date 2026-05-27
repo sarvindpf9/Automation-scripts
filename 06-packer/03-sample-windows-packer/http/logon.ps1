@@ -49,107 +49,149 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-try
-{
-    # Need to have network connection to continue, wait 30
-    # seconds for the network to be active.
-    start-sleep -s 30
-
-        $Host.UI.RawUI.WindowTitle = "Configuring WinRM..."
-        Start-Process -NoNewWindow -Wait -FilePath "powershell" -ArgumentList "-Command Start-Service WinRM"
-        Start-Process -NoNewWindow -Wait -FilePath "powershell" -ArgumentList "-Command Set-Item WSMan:\localhost\Service\AllowUnencrypted `$true -Force"
-        Start-Process -NoNewWindow -Wait -FilePath "powershell" -ArgumentList "-Command Set-Item WSMan:\localhost\Service\Auth\Basic `$true -Force"
-        Start-Process -NoNewWindow -Wait -FilePath "powershell" -ArgumentList "-Command New-NetFirewallRule -DisplayName 'WinRM HTTP' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5985"
-        Start-Process -NoNewWindow -Wait -FilePath "powershell" -ArgumentList "-Command Set-Item WSMan:\localhost\Client\TrustedHosts '*' -Force"
-        Start-Process -NoNewWindow -Wait -FilePath "powershell" -ArgumentList "-Command net user Administrator Passw0rd /active:yes"
-        Start-Process -NoNewWindow -Wait -FilePath "powershell" -ArgumentList "-Command net localgroup 'Remote Management Users' Administrator /add"
-        Start-Process -NoNewWindow -Wait -FilePath "powershell" -ArgumentList "-Command Restart-Service WinRM"
-
-        # Inject extra drivers if the infs directory is present on the attached iso
-        if (Test-Path -Path "E:\infs")
-        {
-            # To install extra drivers the Windows Driver Kit is needed for dpinst.exe.
-            # Sadly you cannot just download dpinst.exe. The whole driver kit must be
-            # installed.
-            # Download the WDK installer.
-            $Host.UI.RawUI.WindowTitle = "Downloading Windows Driver Kit..."
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-            Invoke-WebRequest "https://download.microsoft.com/download/8/6/9/86925F0F-D57A-4BA4-8278-861B6876D78E/wdk/wdksetup.exe" -Outfile "c:\wdksetup.exe"
-
-            # Run the installer.
-            $Host.UI.RawUI.WindowTitle = "Installing Windows Driver Kit..."
-            $p = Start-Process -PassThru -Wait -FilePath "c:\wdksetup.exe" -ArgumentList "/features OptionId.WindowsDriverKitComplete /q /ceip off /norestart"
-            if ($p.ExitCode -ne 0)
-            {
-                throw "Installing wdksetup.exe failed."
-            }
-
-            # Run dpinst.exe with the path to the drivers.
-            $Host.UI.RawUI.WindowTitle = "Injecting Windows drivers..."
-            $dpinst = "$ENV:ProgramFiles (x86)\Windows Kits\8.1\redist\DIFx\dpinst\EngMui\x64\dpinst.exe"
-            Start-Process -Wait -FilePath "$dpinst" -ArgumentList "/S /C /F /SA /Path E:\infs"
-
-            # Uninstall the WDK
-            $Host.UI.RawUI.WindowTitle = "Uninstalling Windows Driver Kit..."
-            Start-Process -Wait -FilePath "c:\wdksetup.exe" -ArgumentList "/features + /q /uninstall /norestart"
-
-            # Clean-up
-            Remove-Item -Path c:\wdksetup.exe
-        }
-
-        $Host.UI.RawUI.WindowTitle = "Installing Cloudbase-Init..."
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest "https://cloudbase.it/downloads/CloudbaseInitSetup_Stable_x64.msi" -Outfile "c:\cloudbase.msi"
-        $cloudbaseInitLog = "$ENV:Temp\cloudbase_init.log"
-        $serialPortName = @(Get-WmiObject Win32_SerialPort)[0].DeviceId
-        $p = Start-Process -Wait -PassThru -FilePath msiexec -ArgumentList "/i c:\cloudbase.msi /qn /norestart /l*v $cloudbaseInitLog LOGGINGSERIALPORTNAME=$serialPortName"
-        if ($p.ExitCode -ne 0)
-        {
-            throw "Installing $cloudbaseInitPath failed. Log: $cloudbaseInitLog"
-        }
-
-        # Install virtio drivers
-        $Host.UI.RawUI.WindowTitle = "Installing Virtio Drivers..."
-        certutil -addstore "TrustedPublisher" A:\rh.cer
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win-gt-x64.msi" -Outfile "c:\virtio.msi"
-        Invoke-WebRequest "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win-guest-tools.exe" -Outfile "c:\virtio.exe"
-        $virtioLog = "$ENV:Temp\virtio.log"
-        $serialPortName = @(Get-WmiObject Win32_SerialPort)[0].DeviceId
-        $p = Start-Process -Wait -PassThru -FilePath msiexec -ArgumentList "/a c:\virtio.msi /qn /norestart /l*v $virtioLog LOGGINGSERIALPORTNAME=$serialPortName"
-        $p = Start-Process -Wait -PassThru -FilePath c:\virtio.exe -Argument "/silent"
-
-        # We're done, remove LogonScript, disable AutoLogon
-        Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name Unattend*
-        Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name AutoLogonCount
-
-        $Host.UI.RawUI.WindowTitle = "Running SetSetupComplete..."
-        & "$ENV:ProgramFiles\Cloudbase Solutions\Cloudbase-Init\bin\SetSetupComplete.cmd"
-
-        if ($RunPowershell) {
-            $Host.UI.RawUI.WindowTitle = "Paused, waiting for user to finish work in other terminal"
-            Write-Host "Spawning another powershell for the user to complete any work..."
-            Start-Process -Wait -PassThru -FilePath powershell
-        }
-
-        # Clean-up
-        Remove-Item -Path c:\cloudbase.msi
-        Remove-Item -Path c:\virtio.msi
-        Remove-Item -Path c:\virtio.exe
-
-        # Write success, this is used to check that this process made it this far
-        New-Item -Path c:\success.tch -Type file -Force
-
-        $Host.UI.RawUI.WindowTitle = "Running Sysprep..."
-        if ($DoGeneralize) {
-            $unattendedXmlPath = "$ENV:ProgramFiles\Cloudbase Solutions\Cloudbase-Init\conf\Unattend.xml"
-            & "$ENV:SystemRoot\System32\Sysprep\Sysprep.exe" `/generalize `/oobe `/shutdown `/unattend:"$unattendedXmlPath"
-        } else {
-            $unattendedXmlPath = "$ENV:ProgramFiles\Cloudbase Solutions\Cloudbase-Init\conf\Unattend.xml"
-            & "$ENV:SystemRoot\System32\Sysprep\Sysprep.exe" `/oobe `/shutdown `/unattend:"$unattendedXmlPath"
-        }
+# Polls DNS until outbound connectivity is confirmed or the timeout expires.
+# A blind sleep is unreliable: too short on slow VMs, always wasteful on fast ones.
+function Wait-NetworkReady {
+    param([int]$TimeoutSeconds = 120, [int]$PollSeconds = 5)
+    $elapsed = 0
+    $Host.UI.RawUI.WindowTitle = "Waiting for network..."
+    Write-Host "Waiting for network connectivity (timeout ${TimeoutSeconds}s)..."
+    while ($elapsed -lt $TimeoutSeconds) {
+        try {
+            [void][System.Net.Dns]::GetHostEntry("cloudbase.it")
+            Write-Host "Network ready after ${elapsed}s."
+            return
+        } catch { }
+        Start-Sleep -Seconds $PollSeconds
+        $elapsed += $PollSeconds
+    }
+    throw "Network not available after ${TimeoutSeconds}s — aborting."
 }
-catch
-{
-    $_ | Out-File c:\error_log.txt
+
+# Wraps Invoke-WebRequest with retry/back-off so transient failures don't abort the build.
+function Invoke-WebRequestWithRetry {
+    param(
+        [string]$Uri,
+        [string]$OutFile,
+        [int]$MaxAttempts = 3,
+        [int]$BackoffSeconds = 15
+    )
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            Write-Host "Downloading $Uri (attempt $attempt/$MaxAttempts)..."
+            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
+            return
+        } catch {
+            if ($attempt -eq $MaxAttempts) { throw }
+            Write-Warning "Download failed (attempt $attempt): $_  Retrying in ${BackoffSeconds}s..."
+            Start-Sleep -Seconds $BackoffSeconds
+        }
+    }
+}
+
+try {
+    Wait-NetworkReady
+
+    # --- WinRM ---
+    # Run all config steps directly in this session — spawning a child powershell.exe
+    # per command adds ~2-3s process-init overhead per call (7 calls = ~15-20s wasted).
+    $Host.UI.RawUI.WindowTitle = "Configuring WinRM..."
+    Start-Service WinRM
+    Set-Item WSMan:\localhost\Service\AllowUnencrypted $true -Force
+    Set-Item WSMan:\localhost\Service\Auth\Basic $true -Force
+    if (-not (Get-NetFirewallRule -DisplayName 'WinRM HTTP' -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName 'WinRM HTTP' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5985
+    }
+    Set-Item WSMan:\localhost\Client\TrustedHosts '*' -Force
+    net user Administrator Passw0rd /active:yes
+    net localgroup 'Remote Management Users' Administrator /add
+    Restart-Service WinRM
+
+    # --- Extra driver injection ---
+    if (Test-Path -Path "E:\infs") {
+        $Host.UI.RawUI.WindowTitle = "Injecting Windows drivers..."
+        # pnputil is built into Windows 8+ — no WDK download/install/uninstall needed.
+        Write-Host "Running pnputil to inject drivers from E:\infs..."
+        $pnpOutput = & pnputil /add-driver "E:\infs\*.inf" /subdirs /install 2>&1
+        Write-Host $pnpOutput
+        if ($LASTEXITCODE -ne 0) {
+            throw "pnputil driver injection failed (exit $LASTEXITCODE)."
+        }
+    }
+
+    # --- Cloudbase-Init ---
+    $Host.UI.RawUI.WindowTitle = "Installing Cloudbase-Init..."
+    Invoke-WebRequestWithRetry -Uri "https://cloudbase.it/downloads/CloudbaseInitSetup_Stable_x64.msi" -OutFile "c:\cloudbase.msi"
+    $cloudbaseInitLog = "$ENV:Temp\cloudbase_init.log"
+    $serialPorts = @(Get-WmiObject Win32_SerialPort)
+    $serialPortName = if ($serialPorts.Count -gt 0) { $serialPorts[0].DeviceId } else { "COM1" }
+    $p = Start-Process -Wait -PassThru -FilePath msiexec `
+        -ArgumentList "/i c:\cloudbase.msi /qn /norestart /l*v `"$cloudbaseInitLog`" LOGGINGSERIALPORTNAME=$serialPortName"
+    if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+        throw "Cloudbase-Init install failed (exit $($p.ExitCode)). Log: $cloudbaseInitLog"
+    }
+
+    # --- Virtio drivers ---
+    $Host.UI.RawUI.WindowTitle = "Installing Virtio Drivers..."
+    certutil -addstore "TrustedPublisher" A:\rh.cer
+    Invoke-WebRequestWithRetry `
+        -Uri "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win-gt-x64.msi" `
+        -OutFile "c:\virtio.msi"
+    Invoke-WebRequestWithRetry `
+        -Uri "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win-guest-tools.exe" `
+        -OutFile "c:\virtio.exe"
+    $virtioLog = "$ENV:Temp\virtio.log"
+    # /i = regular install (original used /a = administrative/unpack-only, which does not install drivers)
+    $p = Start-Process -Wait -PassThru -FilePath msiexec `
+        -ArgumentList "/i c:\virtio.msi /qn /norestart /l*v `"$virtioLog`""
+    if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+        throw "Virtio MSI install failed (exit $($p.ExitCode)). Log: $virtioLog"
+    }
+    $p = Start-Process -Wait -PassThru -FilePath "c:\virtio.exe" -ArgumentList "/silent"
+    if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+        throw "Virtio guest tools install failed (exit $($p.ExitCode))."
+    }
+
+    # Remove the run-once logon script key and auto-logon counter.
+    # SilentlyContinue guards against the properties already being absent on a re-run.
+    Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" `
+        -Name "Unattend*" -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" `
+        -Name "AutoLogonCount" -ErrorAction SilentlyContinue
+
+    $Host.UI.RawUI.WindowTitle = "Running SetSetupComplete..."
+    & "$ENV:ProgramFiles\Cloudbase Solutions\Cloudbase-Init\bin\SetSetupComplete.cmd"
+
+    # Debug hook — only reachable when explicitly invoked with -RunPowershell.
+    # Never triggered from Autounattend.xml (positional arg 1 binds to $DoGeneralize, not this switch).
+    if ($RunPowershell) {
+        $Host.UI.RawUI.WindowTitle = "DEBUG: waiting for user to close shell"
+        Write-Host "Spawning interactive shell for manual work. Close it to continue the build."
+        Start-Process -Wait -PassThru -FilePath powershell | Out-Null
+    }
+
+    # Clean up downloaded installers
+    Remove-Item -Path "c:\cloudbase.msi" -Force
+    Remove-Item -Path "c:\virtio.msi"    -Force
+    Remove-Item -Path "c:\virtio.exe"    -Force
+
+    # Marker consumed by post-build verification steps
+    New-Item -Path "c:\success.tch" -ItemType File -Force | Out-Null
+
+    $Host.UI.RawUI.WindowTitle = "Running Sysprep..."
+    $unattendedXmlPath = "$ENV:ProgramFiles\Cloudbase Solutions\Cloudbase-Init\conf\Unattend.xml"
+    if ($DoGeneralize) {
+        & "$ENV:SystemRoot\System32\Sysprep\Sysprep.exe" /generalize /oobe /shutdown /unattend:"$unattendedXmlPath"
+    } else {
+        & "$ENV:SystemRoot\System32\Sysprep\Sysprep.exe" /oobe /shutdown /unattend:"$unattendedXmlPath"
+    }
+}
+catch {
+    # Write to both the error log file and the console so the failure appears in the
+    # serial/stdio output that Packer captures (communicator = "none" means this is
+    # the only signal visible outside the VM).
+    $msg = "LOGON SCRIPT FAILED: $_"
+    $msg | Out-File "c:\error_log.txt" -Force
+    Write-Error $msg
 }

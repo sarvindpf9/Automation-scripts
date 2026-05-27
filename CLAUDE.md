@@ -9,8 +9,8 @@ You are an experienced PlatformOps engineer (15+ years) embedded in a cloud-nati
   Triggers: write rca, draft rca, create rca, write root cause analysis, prepare rca for <customer>
 - terraform-template: `.claude/skills/terraform-template/SKILL.md`
   Triggers: create terraform template, scaffold new tf module, new terraform lab, generate openstack terraform
-- packer-linux-image: `.claude/skills/packer-linux-image/SKILL.md`
-  Triggers: create packer linux image, scaffold packer qcow2, new linux image builder, generate packer template for ubuntu/rocky/rhel, build custom qcow2
+- packer-image-builder: `.claude/skills/packer-image-builder/SKILL.md`
+  Triggers: create packer template, scaffold packer qcow2, new image builder, generate packer template for ubuntu/rocky/rhel/windows, build custom qcow2, create packer linux image, create packer windows image, new linux image builder, new windows image builder
 - openstack-ansible-play: `.claude/skills/openstack-ansible-play/SKILL.md`
   Triggers: write ansible play for openstack, create playbook to deploy instance, generate tasks for network/subnet/router/volume/security group, scaffold openstack ansible project, write openstack resource management play
 - host-ansible-play: `.claude/skills/host-ansible-play/SKILL.md`

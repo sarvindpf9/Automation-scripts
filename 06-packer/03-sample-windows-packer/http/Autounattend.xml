@@ -3,12 +3,12 @@
     <settings pass="windowsPE">
         <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
             <DiskConfiguration>
-                <WillShowUI>OnError</WillShowUI>
+                <WillShowUI>Never</WillShowUI>
                 <Disk wcm:action="add">
  		        	<CreatePartitions>
                         <CreatePartition wcm:action="add">
                             <Order>1</Order>
-                            <Size>100</Size>
+                            <Size>260</Size>
                             <Type>EFI</Type>
                         </CreatePartition>
                         <CreatePartition wcm:action="add">
@@ -19,7 +19,7 @@
                         <CreatePartition wcm:action="add">
                             <Order>3</Order>
                             <Type>Primary</Type>
-                            <Size>768</Size>
+                            <Size>1024</Size>
                         </CreatePartition>
                         <CreatePartition wcm:action="add">
                             <Order>4</Order>
@@ -29,6 +29,7 @@
                     </CreatePartitions>
                     <ModifyPartitions>
                         <ModifyPartition wcm:action="add">
+                            <Active>true</Active>
                             <Label>EFI</Label>
                             <Format>FAT32</Format>
                             <Order>1</Order>
@@ -58,21 +59,23 @@
                         <PartitionID>4</PartitionID>
                         <DiskID>0</DiskID>
                     </InstallTo>
-                    <InstallToAvailablePartition>false</InstallToAvailablePartition>
-                    <WillShowUI>OnError</WillShowUI>
+                    <WillShowUI>Never</WillShowUI>
                     <InstallFrom>
                         <MetaData wcm:action="add">
                             <Key>/IMAGE/NAME</Key>
-                            <Value>Windows Server 2019 SERVERSTANDARD</Value>
+                            <Value>Windows Server 2025 SERVERSTANDARD</Value>
                         </MetaData>
                     </InstallFrom>
                 </OSImage>
             </ImageInstall>
             <UserData>
-                <!--<ProductKey>
-                    <Key>@PKEY@</Key>
+                <!-- ProductKey: omit entirely for Evaluation ISO (auto-selects edition).
+                     For Volume License ISO, uncomment and set KMS client setup key from
+                     https://learn.microsoft.com/en-us/windows-server/get-started/kms-client-activation-keys
+                <ProductKey>
+                    <Key>REPLACE_WITH_KMS_CLIENT_SETUP_KEY</Key>
                     <WillShowUI>Never</WillShowUI>
-                </ProductKey>-->
+                </ProductKey> -->
                 <AcceptEula>true</AcceptEula>
             </UserData>
         </component>
@@ -99,6 +102,8 @@
             </VisualEffects>
             <OOBE>
                 <HideEULAPage>true</HideEULAPage>
+                <HideLocalAccountScreen>true</HideLocalAccountScreen>
+                <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
                 <ProtectYourPC>3</ProtectYourPC>
                 <NetworkLocation>Work</NetworkLocation>
                 <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>

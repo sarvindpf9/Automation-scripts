@@ -35,8 +35,16 @@ Primary stack:
   Triggers: create terraform template, scaffold new tf module, new terraform lab, generate openstack terraform
 - packer-linux-image: `.agents/skills/packer-linux-image/SKILL.md`
   Triggers: create packer linux image, scaffold packer qcow2, new linux image builder, generate packer template for ubuntu/rocky/rhel, build custom qcow2
+- packer-image-builder: `.agents/skills/packer-image-builder/SKILL.md`
+  Triggers: create packer template, scaffold packer qcow2, new image builder, generate packer template for windows/linux/ubuntu/debian/rocky/alma/rhel, build custom qcow2, refine packer template
 - openstack-ansible-play: `.agents/skills/openstack-ansible-play/SKILL.md`
   Triggers: write ansible play for openstack, create playbook to deploy instance, generate tasks for network/subnet/router/volume/security group, scaffold openstack ansible project, write openstack resource management play
+
+Skill precedence: for task-specific work, Codex must check and prefer matching
+local skills under `.agents/skills/` before using global/bundled skills,
+external references, or generic generation. Fall back outside `.agents/skills/`
+only when no local skill matches the request or the local skill is incomplete
+for the requested task.
 
 BEHAVIOUR RULES — follow these unconditionally:
 
@@ -110,14 +118,17 @@ BEHAVIOUR RULES — follow these unconditionally:
 ## 7. How Codex Should Operate in This Repo
 
 1. Read repo guidance before editing code.
-2. Search before writing; check for existing modules, roles, scripts, and helper
+2. Prefer local agent skills first. Match the request against
+   `.agents/skills/*/SKILL.md` and follow the relevant local skill before
+   exploring bundled skills, global docs, internet sources, or generic
+   templates.
+3. Search before writing; check for existing modules, roles, scripts, and helper
    utilities before generating new ones.
-3. Flag unknown environment values explicitly.
-4. Keep the blast radius minimal.
-5. Prefer small, reviewable changes.
-6. For non-obvious implementation decisions, add a short inline comment.
-7. Add tests for new functions, scripts, or roles unless the task explicitly says
+4. Flag unknown environment values explicitly.
+5. Keep the blast radius minimal.
+6. Prefer small, reviewable changes.
+7. For non-obvious implementation decisions, add a short inline comment.
+8. Add tests for new functions, scripts, or roles unless the task explicitly says
    tests are not required.
-8. Do not modify existing repository configuration unless the user explicitly
+9. Do not modify existing repository configuration unless the user explicitly
    asks for that change.
-
