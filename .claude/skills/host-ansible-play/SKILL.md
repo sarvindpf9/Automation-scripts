@@ -1,6 +1,6 @@
 ---
 name: host-ansible-play
-description: "Use this skill when the user asks to write, generate, scaffold, or fix Ansible playbooks for configuring generic Linux VMs, bare-metal hosts, or OS-level host settings such as networking with netplan, bonding, VLANs, hostname, packages, files, mounts, LVM, disk partitioning, sysctl, services, users, SSH hardening, multipath, or preflight checks. Produces SSH-based host/bare-metal Ansible projects using FQCN modules, group_vars-driven configuration, safe placeholders, idempotent tasks, handlers, validation, and narrowly scoped task files."
+description: "Use this skill when the user asks to write, generate, scaffold, or fix Ansible playbooks for configuring generic Linux VMs, bare-metal hosts, or OS-level host settings: networking (netplan, bonding, VLAN), hostname, packages, files, mounts, LVM/disk partitioning, sysctl, services, users, SSH hardening, multipath, or preflight checks. Produces SSH-based host/bare-metal Ansible projects using FQCN modules, group_vars-driven configuration, safe placeholders, idempotent tasks, handlers, and validation steps."
 ---
 
 # Host / Bare-Metal Ansible Play Skill
@@ -19,7 +19,6 @@ description: "Use this skill when the user asks to write, generate, scaffold, or
 - Make optional host changes opt-in with empty defaults, e.g. `target_hostname: ""` and `when: target_hostname | length > 0`.
 - Do not set `stdout_callback = yaml` unless the project also installs the callback dependency. Use `stdout_callback = default` for portable templates.
 - Use `ansible.builtin.command` when no shell features are required. Use `ansible.builtin.shell` only for shell builtins, pipes, redirects, globbing, or compound expressions, and set `args.executable: /bin/bash` when Bash is required.
-- For systemd service state gates, verify the unit is installed before accepting `systemctl is-active <unit>`; require `LoadState=loaded` plus an existing `FragmentPath` or `SourcePath`, then treat stdout `active` as active for SysV/LSB-generated `active (exited)` units.
 - For edits to critical files (`/etc/fstab`, `/etc/netplan/*.yaml`, service configs, SSH config, multipath config), set `backup: true`.
 - For files, directories, templates, and line edits, set owner/group/mode explicitly.
 - Validate derived facts with `ansible.builtin.assert` before writing critical config.
@@ -234,81 +233,6 @@ Import only task files relevant to the requested operation. Do not include stora
 ```
 
 Set `required_commands` from `group_vars/all.yml` or directly in the play for commands needed by the requested task. Use `ansible.builtin.shell` here because `command -v` is a shell builtin.
-
-### Systemd Service State Gates
-
-Use this pattern when later tasks should run only if a service is installed and active. This is important for SysV/LSB-generated units, where `systemctl status` can show `Active: active (exited)` while `service_facts` may not report `state: running`. Do not use `systemctl is-active` alone as an install check; verify the unit is loaded and backed by an existing unit/source file.
-
-```yaml
----
-- name: Collect service facts
-  ansible.builtin.service_facts:
-
-- name: Check target service systemd unit metadata
-  ansible.builtin.command: >-
-    systemctl show {{ target_service_unit }}
-    --property=LoadState
-    --property=FragmentPath
-    --property=SourcePath
-  register: target_service_systemd_unit
-  changed_when: false
-  failed_when: false
-
-- name: Parse target service systemd unit metadata
-  ansible.builtin.set_fact:
-    target_service_systemd_unit_props: >-
-      {{
-        dict(target_service_systemd_unit.stdout_lines | map('split', '=', 1))
-      }}
-
-- name: Check target service systemd fragment path
-  ansible.builtin.stat:
-    path: "{{ target_service_systemd_unit_props.FragmentPath }}"
-  register: target_service_fragment_path
-  when: target_service_systemd_unit_props.FragmentPath | default("") | length > 0
-
-- name: Check target service systemd source path
-  ansible.builtin.stat:
-    path: "{{ target_service_systemd_unit_props.SourcePath }}"
-  register: target_service_source_path
-  when: target_service_systemd_unit_props.SourcePath | default("") | length > 0
-
-- name: Check target service systemd active state
-  ansible.builtin.command: systemctl is-active {{ target_service_unit }}
-  register: target_service_systemd_active
-  changed_when: false
-  failed_when: false
-
-- name: Read target service fact
-  ansible.builtin.set_fact:
-    target_service_fact: >-
-      {{
-        ansible_facts.services[target_service_unit]
-        | default(ansible_facts.services[target_service_name] | default({}))
-      }}
-
-- name: Set target service installed and active flags
-  ansible.builtin.set_fact:
-    target_service_installed: >-
-      {{
-        target_service_systemd_unit_props.LoadState | default("") == "loaded"
-        and (
-          target_service_fragment_path.stat.exists | default(false)
-          or target_service_source_path.stat.exists | default(false)
-        )
-      }}
-    target_service_active: >-
-      {{
-        target_service_systemd_active.stdout | default("") == "active"
-        or target_service_fact.state | default("") == "running"
-      }}
-
-- name: Skip host when target service is not installed and active
-  ansible.builtin.meta: end_host
-  when: not (target_service_installed and target_service_active)
-```
-
-Set `target_service_unit` to the full unit name such as `pf9-glance-api.service`, and `target_service_name` to the non-suffixed service name only when service facts may use that key. In multi-host plays, use `ansible.builtin.meta: end_host` to skip only the hosts that do not qualify while continuing on the remaining hosts.
 
 ### Existing Service Config Blocks
 
@@ -735,6 +659,16 @@ Use SSH hardening only when explicitly requested. Prefer a variable-driven map r
   loop_control:
     label: "{{ item.key }}"
   notify: Restart sshd
+```
+
+`group_vars` example:
+
+```yaml
+sshd_settings:
+  PermitRootLogin: "no"
+  PasswordAuthentication: "no"
+  X11Forwarding: "no"
+  MaxAuthTries: "3"
 ```
 
 ### Files And Templates

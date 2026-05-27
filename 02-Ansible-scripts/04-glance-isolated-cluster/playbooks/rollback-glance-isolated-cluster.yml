@@ -1,0 +1,111 @@
+---
+- name: Roll back local Glance isolated cluster access
+  hosts: glance_isolated_cluster_hosts
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Check HAProxy configuration file
+      ansible.builtin.stat:
+        path: "{{ glance_haproxy_cfg_path }}"
+      register: glance_haproxy_cfg
+
+    - name: Ensure default HAProxy configuration file exists
+      ansible.builtin.assert:
+        that:
+          - glance_haproxy_cfg.stat.exists
+          - glance_haproxy_cfg.stat.isreg
+        fail_msg: >-
+          {{ glance_haproxy_cfg_path }} does not exist as a regular file.
+          Rollback will not proceed because the host must retain its default
+          HAProxy configuration file.
+
+    - name: Remove managed Glance HAProxy frontend and backend block
+      ansible.builtin.blockinfile:
+        path: "{{ glance_haproxy_cfg_path }}"
+        marker: "# {mark} ANSIBLE MANAGED GLANCE LOCAL CLUSTER HTTPS"
+        state: absent
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+      notify: Restart haproxy
+
+    - name: Check Cinder override file
+      ansible.builtin.stat:
+        path: /opt/pf9/etc/pf9-cindervolume-base/conf.d/cinder_override.conf
+      register: cinder_override_conf
+
+    - name: Remove Cinder Glance endpoint override
+      community.general.ini_file:
+        path: /opt/pf9/etc/pf9-cindervolume-base/conf.d/cinder_override.conf
+        section: glance
+        option: endpoint_override
+        state: absent
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+      notify: Restart pf9-cindervolume-base
+      when: cinder_override_conf.stat.exists
+
+    - name: Remove Cinder pf9_glance cluster override
+      community.general.ini_file:
+        path: /opt/pf9/etc/pf9-cindervolume-base/conf.d/cinder_override.conf
+        section: pf9_glance
+        option: glance_cluster
+        state: absent
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+      notify: Restart pf9-cindervolume-base
+      when: cinder_override_conf.stat.exists
+
+    - name: Check Nova override file
+      ansible.builtin.stat:
+        path: /opt/pf9/etc/nova/conf.d/nova_override.conf
+      register: nova_override_conf
+
+    - name: Remove Nova Glance endpoint override
+      community.general.ini_file:
+        path: /opt/pf9/etc/nova/conf.d/nova_override.conf
+        section: glance
+        option: endpoint_override
+        state: absent
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+      notify: Restart pf9-ostackhost
+      when: nova_override_conf.stat.exists
+
+    - name: Remove Nova pf9_glance cluster override
+      community.general.ini_file:
+        path: /opt/pf9/etc/nova/conf.d/nova_override.conf
+        section: pf9_glance
+        option: glance_cluster
+        state: absent
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+      notify: Restart pf9-ostackhost
+      when: nova_override_conf.stat.exists
+
+  handlers:
+    - name: Restart haproxy
+      ansible.builtin.service:
+        name: haproxy
+        state: restarted
+
+    - name: Restart pf9-ostackhost
+      ansible.builtin.service:
+        name: pf9-ostackhost.service
+        state: restarted
+
+    - name: Restart pf9-cindervolume-base
+      ansible.builtin.service:
+        name: pf9-cindervolume-base
+        state: restarted
+

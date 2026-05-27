@@ -1,0 +1,9 @@
+---
+all:
+  children:
+    glance_isolated_cluster_hosts:
+      hosts:
+        glance-host-1:
+          ansible_host: <HOSTNAME_OR_IP>
+          ansible_user: <SSH_USER>
+

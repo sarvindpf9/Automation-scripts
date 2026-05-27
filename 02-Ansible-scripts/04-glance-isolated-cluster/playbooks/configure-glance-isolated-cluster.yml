@@ -1,0 +1,241 @@
+---
+- name: Configure local Glance isolated cluster access
+  hosts: glance_isolated_cluster_hosts
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Collect service facts
+      ansible.builtin.service_facts:
+
+    - name: Check pf9-glance-api systemd unit metadata
+      ansible.builtin.command: >-
+        systemctl show pf9-glance-api.service
+        --property=LoadState
+        --property=FragmentPath
+        --property=SourcePath
+      register: pf9_glance_api_systemd_unit
+      changed_when: false
+      failed_when: false
+
+    - name: Parse pf9-glance-api systemd unit metadata
+      ansible.builtin.set_fact:
+        pf9_glance_api_systemd_unit_props: >-
+          {{
+            dict(pf9_glance_api_systemd_unit.stdout_lines | map('split', '=', 1))
+          }}
+
+    - name: Check pf9-glance-api systemd fragment path
+      ansible.builtin.stat:
+        path: "{{ pf9_glance_api_systemd_unit_props.FragmentPath }}"
+      register: pf9_glance_api_fragment_path
+      when: pf9_glance_api_systemd_unit_props.FragmentPath | default("") | length > 0
+
+    - name: Check pf9-glance-api systemd source path
+      ansible.builtin.stat:
+        path: "{{ pf9_glance_api_systemd_unit_props.SourcePath }}"
+      register: pf9_glance_api_source_path
+      when: pf9_glance_api_systemd_unit_props.SourcePath | default("") | length > 0
+
+    - name: Check pf9-glance-api systemd active state
+      ansible.builtin.command: systemctl is-active pf9-glance-api.service
+      register: pf9_glance_api_systemd_active
+      changed_when: false
+      failed_when: false
+
+    - name: Read pf9-glance-api service fact
+      ansible.builtin.set_fact:
+        pf9_glance_api_service: >-
+          {{
+            ansible_facts.services["pf9-glance-api.service"]
+            | default(ansible_facts.services["pf9-glance-api"] | default({}))
+          }}
+
+    - name: Set pf9-glance-api installed and active flags
+      ansible.builtin.set_fact:
+        pf9_glance_api_installed: >-
+          {{
+            pf9_glance_api_systemd_unit_props.LoadState | default("") == "loaded"
+            and (
+              pf9_glance_api_fragment_path.stat.exists | default(false)
+              or pf9_glance_api_source_path.stat.exists | default(false)
+            )
+          }}
+        pf9_glance_api_active: >-
+          {{
+            (
+              pf9_glance_api_systemd_active.stdout | default("") == "active"
+              or pf9_glance_api_service.state | default("") == "running"
+            )
+          }}
+
+    - name: Skip host when pf9-glance-api is not installed and active
+      ansible.builtin.meta: end_host
+      when: not (pf9_glance_api_installed and pf9_glance_api_active)
+
+    - name: Check haproxy configuration file
+      ansible.builtin.stat:
+        path: "{{ glance_haproxy_cfg_path }}"
+      register: glance_haproxy_cfg
+
+    - name: Save one-time HAProxy configuration rollback copy
+      ansible.builtin.copy:
+        src: "{{ glance_haproxy_cfg_path }}"
+        dest: "{{ glance_haproxy_backup_path }}"
+        remote_src: true
+        force: false
+        owner: root
+        group: root
+        mode: "0644"
+      when:
+        - glance_haproxy_cfg.stat.exists
+
+    - name: Read existing HAProxy configuration
+      ansible.builtin.slurp:
+        path: "{{ glance_haproxy_cfg_path }}"
+      register: glance_haproxy_cfg_content
+      when:
+        - glance_haproxy_cfg.stat.exists
+
+    - name: Prevent duplicate unmanaged HAProxy Glance sections
+      ansible.builtin.assert:
+        that:
+          - >-
+            glance_haproxy_frontend_count == 0
+            or (
+              glance_haproxy_frontend_count == 1
+              and '# BEGIN ANSIBLE MANAGED GLANCE LOCAL CLUSTER HTTPS' in glance_haproxy_text
+            )
+          - >-
+            glance_haproxy_backend_count == 0
+            or (
+              glance_haproxy_backend_count == 1
+              and '# BEGIN ANSIBLE MANAGED GLANCE LOCAL CLUSTER HTTPS' in glance_haproxy_text
+            )
+        fail_msg: >-
+          Existing unmanaged HAProxy Glance frontend or backend sections were
+          found in {{ glance_haproxy_cfg_path }}. Remove or rename those
+          sections before running this playbook to avoid duplicate HAProxy
+          configuration blocks.
+      vars:
+        glance_haproxy_text: "{{ glance_haproxy_cfg_content.content | b64decode }}"
+        glance_haproxy_frontend_count: >-
+          {{
+            glance_haproxy_text
+            | regex_findall('(?m)^frontend\\s+glance_admin_local\\s*$')
+            | length
+          }}
+        glance_haproxy_backend_count: >-
+          {{
+            glance_haproxy_text
+            | regex_findall('(?m)^backend\\s+glance_admin_cluster_local_https\\s*$')
+            | length
+          }}
+      when:
+        - glance_haproxy_cfg.stat.exists
+
+    - name: Append local Glance HAProxy frontend and backend
+      ansible.builtin.blockinfile:
+        path: "{{ glance_haproxy_cfg_path }}"
+        marker: "# {mark} ANSIBLE MANAGED GLANCE LOCAL CLUSTER HTTPS"
+        insertafter: EOF
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+        block: |
+          frontend glance_admin_local
+                  bind *:9444
+                  mode http
+                  default_backend glance_admin_cluster_local_https
+
+          backend glance_admin_cluster_local_https
+                  mode http
+                  balance roundrobin
+                  # Glance API health check.
+                  option httpchk GET /v2/
+                  http-check expect rstatus 200|401
+                  # HTTPS Glance API backends in THIS cluster only.
+                  # Replace these IPs with the local cluster Glance node IPs.
+          {% for server in glance_haproxy_backend_servers %}
+                  server {{ server.name }} {{ server.address }}:{{ server.port | default(9494) }} check ssl verify none
+          {% endfor %}
+      notify: Restart haproxy
+      when:
+        - glance_haproxy_cfg.stat.exists
+
+    - name: Configure Cinder Glance override
+      community.general.ini_file:
+        path: /opt/pf9/etc/pf9-cindervolume-base/conf.d/cinder_override.conf
+        section: glance
+        option: endpoint_override
+        value: "{{ glance_endpoint_override }}"
+        create: true
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+        exclusive: true
+      notify:
+        - Restart pf9-cindervolume-base
+
+    - name: Configure Cinder pf9_glance override
+      community.general.ini_file:
+        path: /opt/pf9/etc/pf9-cindervolume-base/conf.d/cinder_override.conf
+        section: pf9_glance
+        option: glance_cluster
+        value: "{{ glance_cluster_enabled | bool | lower }}"
+        create: true
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+        exclusive: true
+      notify:
+        - Restart pf9-cindervolume-base
+
+    - name: Configure Nova Glance override
+      community.general.ini_file:
+        path: /opt/pf9/etc/nova/conf.d/nova_override.conf
+        section: glance
+        option: endpoint_override
+        value: "{{ glance_endpoint_override }}"
+        create: true
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+        exclusive: true
+      notify:
+        - Restart pf9-ostackhost
+
+    - name: Configure Nova pf9_glance override
+      community.general.ini_file:
+        path: /opt/pf9/etc/nova/conf.d/nova_override.conf
+        section: pf9_glance
+        option: glance_cluster
+        value: "{{ glance_cluster_enabled | bool | lower }}"
+        create: true
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+        exclusive: true
+      notify:
+        - Restart pf9-ostackhost
+
+  handlers:
+    - name: Restart haproxy
+      ansible.builtin.service:
+        name: haproxy
+        state: restarted
+
+    - name: Restart pf9-ostackhost
+      ansible.builtin.service:
+        name: pf9-ostackhost.service
+        state: restarted
+
+    - name: Restart pf9-cindervolume-base
+      ansible.builtin.service:
+        name: pf9-cindervolume-base
+        state: restarted

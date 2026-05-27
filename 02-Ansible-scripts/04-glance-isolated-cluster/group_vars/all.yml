@@ -1,0 +1,18 @@
+---
+glance_haproxy_cfg_path: /etc/haproxy/haproxy.cfg
+glance_haproxy_backup_path: /etc/haproxy/haproxy.cfg.pre_glance_isolated_cluster
+glance_allowed_local_src: <LOCAL_ADMIN_CLIENT_SUBNET>
+
+glance_haproxy_backend_servers:
+  - name: glance01
+    address: 10.96.13.51
+    port: 9494
+  - name: glance02
+    address: 10.96.13.208
+    port: 9494
+  - name: glance03
+    address: 10.96.12.47
+    port: 9494
+
+glance_endpoint_override: https://localhost:9494
+glance_cluster_enabled: false
