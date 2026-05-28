@@ -2,6 +2,9 @@
 
 Orchestrator script to attach or detach ISO images to a running OpenStack VM via `virsh` over SSH. Supports both Glance-backed ISOs (resolved by UUID from an NFS Glance mount) and locally-hosted ISOs present on the target hypervisor. Resolves the target VM by IP or name through Nova, identifies its hypervisor, and performs the operation directly on the KVM host.
 
+> [!WARNING]
+> **Hypervisor OS compatibility:** This script is tested and fully functional on **Ubuntu 24.04 LTS** hypervisors. It will **not work** on **Ubuntu 22.04-based hypervisors** due to the older versions of QEMU and libvirt shipped with that release — specifically, the `virsh attach-disk --live` hotplug path relies on capabilities (SCSI/SATA CDROM hotplug, domain XML update semantics) that are either absent or broken in the QEMU/libvirt versions bundled with Ubuntu 22.04. Upgrade the hypervisor OS to Ubuntu 24.04 before using this script.
+
 ---
 
 ## `attach-detach-cdrom.sh`
