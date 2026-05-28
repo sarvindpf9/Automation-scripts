@@ -231,7 +231,25 @@ sudo ./hostInfo-check.sh
   [ OK ]  filter:                  filter = [ "a|^/dev/nvme[0-9]+n[0-9]+$|", "a|^/dev/nvme[0-9]+n[0-9]+p[0-9]+$|", "a|^/dev/md[0-9]+$|", "a|^/dev/md[0-9]+p[0-9]+$|", "a|^/dev/sda[0-9]*$|","r|.*|" ]
   [ OK ]  global_filter:           global_filter = [ "a|^/dev/nvme[0-9]+n[0-9]+$|", "a|^/dev/nvme[0-9]+n[0-9]+p[0-9]+$|", "a|^/dev/md[0-9]+$|", "a|^/dev/md[0-9]+p[0-9]+$|", "a|^/dev/sda[0-9]*$|","r|.*|" ]
 
-━━━  10. PF9 SERVICES ━━━
+━━━  10. PF9 PACKAGES ━━━
+  [ OK ]  openvswitch-common
+  [ OK ]  openvswitch-switch
+  [ OK ]  ovn-common
+  [ OK ]  ovn-host
+  [ OK ]  pf9-cindervolume-base
+  [ OK ]  pf9-cindervolume-config
+  [ OK ]  pf9-comms
+  [ OK ]  pf9-glance-role
+  [ OK ]  pf9-ha-slave
+  [ OK ]  pf9-hostagent
+  [ OK ]  pf9-ip-discovery
+  [ OK ]  pf9-neutron-base
+  [ OK ]  pf9-neutron-ovn-controller
+  [ OK ]  pf9-neutron-ovn-metadata-agent
+  [ OK ]  pf9-ostackhost
+  [ OK ]  python3-openvswitch
+
+━━━  11. PF9 SERVICES ━━━
   [ OK ]  pf9-ostackhost.service: running
   [ OK ]  pf9-cindervolume-base.service: running
   [ OK ]  pf9-glance-api.service: running
@@ -271,7 +289,7 @@ total_vms_virsh:        1
   [ WARN ]  reserved_percentage not set in cinder.conf
   [ WARN ]  goodness_function not set in cinder.conf
 
-━━━  11. OVS BRIDGES ━━━
+━━━  12. OVS BRIDGES ━━━
   [ WARN ]  Bridge: br-int  (no IPv4 address)
              Ports: listing all ports on br-int (including virtual):
              tap04950ca9-7a
