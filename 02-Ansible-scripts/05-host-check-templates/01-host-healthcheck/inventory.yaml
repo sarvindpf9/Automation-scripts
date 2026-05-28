@@ -1,0 +1,9 @@
+---
+all:
+  children:
+    target_hosts:
+      hosts:
+        host-1:
+          ansible_host: <HOSTNAME_OR_IP>
+          ansible_user: <SSH_USER>
+          ansible_password: <SSH_PASSWORD>

@@ -1,0 +1,5 @@
+---
+# --- sysctl checks ---
+# Extend this list to report additional kernel parameters.
+sysctl_check_params:
+  - net.ipv4.tcp_retries2

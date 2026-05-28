@@ -1,0 +1,41 @@
+---
+- name: Query NTP status via timedatectl
+  ansible.builtin.command: timedatectl status
+  register: timedatectl_out
+  changed_when: false
+
+- name: Parse NTP service and clock sync state
+  ansible.builtin.set_fact:
+    ntp_service_active: >-
+      {{
+        timedatectl_out.stdout_lines
+        | select('match', '^\s*NTP service:')
+        | list | first | default('')
+        | regex_replace('^\s*NTP service:\s*', '')
+        | trim == 'active'
+      }}
+    ntp_clock_synced: >-
+      {{
+        timedatectl_out.stdout_lines
+        | select('match', '^\s*System clock synchronized:')
+        | list | first | default('')
+        | regex_replace('^\s*System clock synchronized:\s*', '')
+        | trim == 'yes'
+      }}
+
+- name: Report NTP status
+  ansible.builtin.debug:
+    msg: >-
+      {{ ansible_facts['hostname'] }}
+      | ntp_service={{ 'active' if ntp_service_active else 'inactive' }}
+      | clock_synced={{ ntp_clock_synced }}
+      | status={{ 'OK' if (ntp_service_active and ntp_clock_synced) else 'WARN' }}
+
+- name: Warn if NTP is not fully synchronised
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: {{ ansible_facts['hostname'] }}
+      NTP not fully synchronised
+      (ntp_service={{ 'active' if ntp_service_active else 'inactive' }},
+      clock_synced={{ ntp_clock_synced }})
+  when: not ntp_service_active or not ntp_clock_synced

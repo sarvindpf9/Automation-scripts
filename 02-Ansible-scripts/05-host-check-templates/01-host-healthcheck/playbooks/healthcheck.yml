@@ -1,0 +1,12 @@
+---
+- name: Host health check
+  hosts: target_hosts
+  gather_facts: true
+  become: true
+
+  tasks:
+    - name: Check sysctl parameters
+      ansible.builtin.import_tasks: ../tasks/check_sysctl.yml
+
+    - name: Check NTP synchronisation
+      ansible.builtin.import_tasks: ../tasks/check_ntp.yml

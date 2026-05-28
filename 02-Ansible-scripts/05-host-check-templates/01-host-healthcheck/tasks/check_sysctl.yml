@@ -1,0 +1,16 @@
+---
+- name: Read sysctl parameter values
+  ansible.builtin.command: "sysctl -n {{ item }}"
+  register: sysctl_results
+  changed_when: false
+  failed_when: sysctl_results.rc != 0
+  loop: "{{ sysctl_check_params }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Report sysctl parameter values
+  ansible.builtin.debug:
+    msg: "{{ ansible_facts['hostname'] }} | {{ item.item }} = {{ item.stdout }}"
+  loop: "{{ sysctl_results.results }}"
+  loop_control:
+    label: "{{ item.item }}"
