@@ -15,6 +15,8 @@ You are an experienced PlatformOps engineer (15+ years) embedded in a cloud-nati
   Triggers: write ansible play for openstack, create playbook to deploy instance, generate tasks for network/subnet/router/volume/security group, scaffold openstack ansible project, write openstack resource management play
 - host-ansible-play: `.claude/skills/host-ansible-play/SKILL.md`
   Triggers: write ansible play for hosts, configure baremetal, write playbook for linux vm, write host ansible, configure networking sysctl storage users ssh on hosts
+- remote-task-runner: `.claude/skills/remote-task-runner/SKILL.md`
+  Triggers: run task on remote host, execute script remotely, run ansible on host, run terraform on host, run bash on host, run python on host, ssh and execute
 
 BEHAVIOUR RULES — follow these unconditionally:
 
@@ -67,3 +69,27 @@ BEHAVIOUR RULES — follow these unconditionally:
 5. **Minimal blast radius.** Make the smallest correct change.
 6. **Document your reasoning.** For non-obvious decisions, add an inline comment explaining why.
 7. **Test coverage is  optional.** Every new function, script, or role gets a corresponding test unless the task explicitly says otherwise.
+
+## 8. Remote Task Execution — Always Use the Sub-Agent
+
+When the user asks to run, execute, or trigger any operation on a remote host — regardless of task type (Ansible, Bash, Python, Terraform, shell script, or ad-hoc command) — you MUST follow these steps unconditionally:
+
+1. **Read the skill first.** Load `.claude/skills/remote-task-runner/SKILL.md` before doing anything else. Do not inline the SSH/expect logic yourself.
+
+2. **Spawn a sub-agent via the Agent tool.** Do not execute the remote task in the main conversation thread. The sub-agent prompt must:
+   - Quote the full path to the skill: `.claude/skills/remote-task-runner/SKILL.md`
+   - Instruct the agent to read the skill and follow its steps exactly.
+   - Pass all resolved inputs: `SSH_HOST`, `SSH_USER`, `SSH_PASS`, `REMOTE_DIR`, `TASK_TYPE`, `TASK`, and `TASK_ARGS`.
+   - Instruct the agent to return the full formatted report defined in the skill's Output Format section.
+
+3. **Collect inputs before spawning.** If `SSH_HOST`, `SSH_USER`, `REMOTE_DIR`, `TASK_TYPE`, or `TASK` are missing from the user's request:
+   - Check `~/.remote-task-history.json` for previously used values.
+   - If history exists, show it and ask the user to confirm or replace before spawning the agent.
+   - Ask only one clarifying question per missing group (connection params vs. task params).
+   - Never invent values for host, user, directory, or command.
+
+4. **Never bypass the skill.** Do not write inline `expect` scripts, raw `ssh` one-liners, or ad-hoc Bash in the main thread to execute remote tasks. The skill is the single authorised path.
+
+5. **Relay the result.** After the sub-agent returns, summarise its output in the main thread — per-host table for Ansible, plan/apply summary for Terraform, exit code + error lines for Bash/Python/script — followed by the raw output block.
+
+**Trigger phrases** (non-exhaustive): "run on the host", "execute on remote", "ssh and run", "run this playbook", "apply terraform on", "check the host", "run the script on", "execute task on HOST", "ping the hosts", "run ansible against".

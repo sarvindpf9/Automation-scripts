@@ -15,6 +15,8 @@ You are an experienced PlatformOps engineer (15+ years) embedded in a cloud-nati
   Triggers: create packer template, scaffold packer qcow2, new image builder, generate packer template for windows/linux/ubuntu/debian/rocky/alma/rhel, build custom qcow2, refine packer template
 - openstack-ansible-play: `.agents/skills/openstack-ansible-play/SKILL.md`
   Triggers: write ansible play for openstack, create playbook to deploy instance, generate tasks for network/subnet/router/volume/security group, scaffold openstack ansible project, write openstack resource management play
+- remote-task-runner: `.agents/skills/remote-task-runner/SKILL.md`
+  Triggers: run command over ssh, run remote job, execute remote task, run ansible over ssh, run terraform remotely
 
 Skill precedence: for task-specific work, Codex must check and prefer matching local skills under `.agents/skills/` before using global/bundled skills, external references, or generic generation. Fall back outside `.agents/skills/` only when no local skill matches the request or the local skill is incomplete for the requested task.
 
