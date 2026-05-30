@@ -1,1 +1,0 @@
-agent-config-repo/codex/CODEX.md

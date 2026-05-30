@@ -15,10 +15,15 @@
 
 # Agent configs
 .mcp.json
+.claude
+.agents
+.codex
+CLAUDE.md
+AGENTS.md
+CODEX.md
 
 # Claude/Codex agent config repo — managed as a separate git repo, cloned via bootstrap.sh
 agent-config-repo/
 
 # Pre-symlink backups created during agent-config-repo migration
 backup/
-
