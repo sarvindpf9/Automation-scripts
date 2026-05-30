@@ -12,3 +12,13 @@
 # Python virtualenv
 .venv/
 **/.venv/
+
+# Agent configs
+.mcp.json
+
+# Claude/Codex agent config repo — managed as a separate git repo, cloned via bootstrap.sh
+agent-config-repo/
+
+# Pre-symlink backups created during agent-config-repo migration
+backup/
+
