@@ -28,6 +28,7 @@ import json
 from datetime import datetime, timezone
 import os
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -112,7 +113,7 @@ def save_history(
     remote_dir: str,
     task_type: str = "bash",
     name: str = "",
-) -> None:
+) -> bool:
     entry = {
         "name": name,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -132,8 +133,9 @@ def save_history(
         deduped.insert(0, entry)
         _HISTORY_FILE.write_text(json.dumps(deduped[:20], indent=2))
         _HISTORY_FILE.chmod(0o600)
+        return True
     except OSError:
-        pass
+        return False
 
 
 def forget_history_profile(name: str) -> bool:
@@ -161,6 +163,14 @@ def find_history_entry(name: str = "", use_last: bool = False) -> Optional[dict]
         return None
     if use_last and entries:
         return entries[0]
+    return None
+
+
+def find_history_entry_for_connection(host: str, user: str) -> Optional[dict]:
+    """Return the newest saved profile for a specific host/user pair."""
+    for entry in load_history_entries():
+        if entry.get("SSH_HOST") == host and entry.get("SSH_USER") == user:
+            return entry
     return None
 
 
@@ -339,6 +349,10 @@ def resolve_config(args: argparse.Namespace) -> AgentConfig:
     else:
         user = _prompt("  SSH username", default="ubuntu")
 
+    matching_history = None
+    if not args.remote_dir:
+        matching_history = find_history_entry_for_connection(host, user)
+
     # Resolve remote_dir
     if args.remote_dir:
         remote_dir = args.remote_dir
@@ -349,6 +363,8 @@ def resolve_config(args: argparse.Namespace) -> AgentConfig:
             override = input(f"  Remote directory [{remote_dir}]: ").strip()
             if override:
                 remote_dir = override
+    elif matching_history:
+        remote_dir = matching_history.get("REMOTE_DIR", "/home/ubuntu")
     else:
         remote_dir = _prompt("  Remote working directory", default="/home/ubuntu")
 
@@ -408,7 +424,7 @@ def _build_expect_script(cfg: AgentConfig) -> str:
         set host       {tcl_quote(cfg.host)}
         set user       {tcl_quote(cfg.user)}
         set pass       {tcl_quote(cfg.password)}
-        set remote_dir {tcl_quote(cfg.remote_dir)}
+        set remote_dir {tcl_quote(shlex.quote(cfg.remote_dir))}
         set cmd        {tcl_quote(cfg.cmd)}
 
         spawn ssh -o StrictHostKeyChecking=no \\
@@ -645,13 +661,15 @@ def main() -> int:
 
     result = run_remote(cfg)
     if reached_remote_shell(result):
-        save_history(
+        history_saved = save_history(
             cfg.host,
             cfg.user,
             cfg.remote_dir,
             infer_task_type(cfg.cmd),
             cfg.profile_name,
         )
+        if not history_saved:
+            print("WARNING: Could not save remote-task history.", file=sys.stderr)
     print_report(cfg, result)
     return result.exit_code
 

@@ -5,6 +5,7 @@ import json
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
 
 
@@ -96,6 +97,43 @@ class RemoteAgentHistoryTest(unittest.TestCase):
             self.remote_agent.find_history_entry("b")["SSH_HOST"],
             "10.0.0.20",
         )
+
+    def test_resolve_config_reuses_remote_dir_for_matching_host_user(self) -> None:
+        self.remote_agent.save_history(
+            "10.0.0.10",
+            "ubuntu",
+            "/home/ubuntu/deploy",
+            "ansible",
+            "deploy",
+        )
+        args = Namespace(
+            host="10.0.0.10",
+            user="ubuntu",
+            remote_dir=None,
+            cmd="ansible-playbook -i inventory.yaml playbooks/site.yml",
+            dry_run=True,
+            profile=None,
+            use_last=False,
+            save_profile="",
+        )
+
+        cfg = self.remote_agent.resolve_config(args)
+
+        self.assertEqual(cfg.remote_dir, "/home/ubuntu/deploy")
+
+    def test_expect_script_shell_quotes_remote_dir(self) -> None:
+        cfg = self.remote_agent.AgentConfig(
+            host="10.0.0.10",
+            user="ubuntu",
+            password="",
+            cmd="pwd",
+            remote_dir="/home/ubuntu/deploy dir",
+            dry_run=False,
+        )
+
+        script = self.remote_agent._build_expect_script(cfg)
+
+        self.assertIn("set remote_dir {'/home/ubuntu/deploy dir'}", script)
 
 
 if __name__ == "__main__":
