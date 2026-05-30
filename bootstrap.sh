@@ -9,14 +9,15 @@ AGENT_CONFIG_DIR="$REPO_ROOT/agent-config-repo"
 # Override by exporting AGENT_CONFIG_URL before running, or edit this line.
 AGENT_CONFIG_URL="${AGENT_CONFIG_URL:-<AGENT_CONFIG_REPO_URL>}"
 
-# Symlinks: <link path in repo> → <target relative to repo root>
-declare -A SYMLINKS=(
-    [".claude"]="agent-config-repo/claude/.claude/"
-    [".agents"]="agent-config-repo/codex/.agents/"
-    [".codex"]="agent-config-repo/codex/.codex"
-    ["CLAUDE.md"]="agent-config-repo/claude/CLAUDE.md"
-    ["AGENTS.md"]="agent-config-repo/codex/AGENTS.md"
-    ["CODEX.md"]="agent-config-repo/codex/CODEX.md"
+# Symlinks: parallel arrays of link names and their targets (relative to repo root)
+LINK_NAMES=(".claude" ".agents" ".codex" "CLAUDE.md" "AGENTS.md" "CODEX.md")
+LINK_TARGETS=(
+    "agent-config-repo/claude/.claude/"
+    "agent-config-repo/codex/.agents/"
+    "agent-config-repo/codex/.codex"
+    "agent-config-repo/claude/CLAUDE.md"
+    "agent-config-repo/codex/AGENTS.md"
+    "agent-config-repo/codex/CODEX.md"
 )
 
 # ── 1. Clone agent-config-repo ──────────────────────────────────────────────
@@ -34,8 +35,9 @@ fi
 
 # ── 2. Verify / create all symlinks ─────────────────────────────────────────
 ERRORS=0
-for LINK in "${!SYMLINKS[@]}"; do
-    TARGET="${SYMLINKS[$LINK]}"
+for i in "${!LINK_NAMES[@]}"; do
+    LINK="${LINK_NAMES[$i]}"
+    TARGET="${LINK_TARGETS[$i]}"
     LINK_PATH="$REPO_ROOT/$LINK"
 
     if [[ -L "$LINK_PATH" ]]; then
