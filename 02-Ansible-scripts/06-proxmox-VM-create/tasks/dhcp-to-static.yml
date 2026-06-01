@@ -1,0 +1,44 @@
+---
+- name: Resolve target interface
+  ansible.builtin.set_fact:
+    _dhcp_iface: "{{ target_interface | default(ansible_default_ipv4.interface) }}"
+
+- name: Assert interface has an IPv4 address
+  ansible.builtin.assert:
+    that:
+      - ansible_facts[_dhcp_iface] is defined
+      - ansible_facts[_dhcp_iface].ipv4 is defined
+    fail_msg: "Interface {{ _dhcp_iface }} has no IPv4 address in gathered facts."
+
+- name: Collect current IP, prefix, gateway, and nameservers
+  ansible.builtin.set_fact:
+    _static_ip: "{{ ansible_facts[_dhcp_iface]['ipv4']['address'] }}"
+    _static_prefix: "{{ ansible_facts[_dhcp_iface]['ipv4']['prefix'] }}"
+    _static_gateway: "{{ ansible_default_ipv4.gateway }}"
+    _static_nameservers: "{{ nameservers | default(ansible_dns.nameservers) | default(['8.8.8.8']) }}"
+
+- name: Disable cloud-init network management
+  ansible.builtin.copy:
+    dest: /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+    content: "network: {config: disabled}\n"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+
+- name: Write static netplan configuration
+  ansible.builtin.template:
+    src: ../templates/netplan-static.yaml.j2
+    dest: "{{ netplan_config_file | default('/etc/netplan/50-cloud-init.yaml') }}"
+    owner: root
+    group: root
+    mode: '0600'
+  become: true
+  register: _netplan_write
+
+- name: Apply netplan
+  ansible.builtin.command:
+    cmd: netplan apply
+  become: true
+  changed_when: true
+  when: _netplan_write.changed

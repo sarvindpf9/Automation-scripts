@@ -13,6 +13,14 @@ chpasswd:
   expire: false
 package_update: false
 write_files:
+  # Prevent cloud-init from overwriting the netplan config on subsequent boots.
+  # Without this, a reboot after Phase 3 would regenerate 50-cloud-init.yaml
+  # from the cloud-init network-data snippet and clobber the static config.
+  - path: /etc/cloud/cloud.cfg.d/99-disable-network.cfg
+    permissions: '0644'
+    content: |
+      network:
+        config: disabled
   - path: /usr/local/bin/apply-netplan.sh
     permissions: '0755'
     content: |
@@ -20,7 +28,7 @@ write_files:
       set -euo pipefail
 
       IFACES=()
-      for v in $(ls /sys/bus/virtio/drivers/virtio_net/ 2>/dev/null | grep '^virtio[0-9]' | sort -V || true); do
+      for v in $(ls /sys/bus/virtio/drivers/virtio_net/ 2>/dev/null | grep '^virtio[0-9]' | sort -V); do
         iface=$(ls /sys/bus/virtio/drivers/virtio_net/${v}/net/ 2>/dev/null | head -1)
         [ -n "${iface}" ] && IFACES+=("${iface}")
       done

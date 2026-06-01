@@ -1,0 +1,51 @@
+version: 2
+ethernets:
+{% for nic in vm_config.network_interfaces %}
+  eth{{ loop.index0 }}:
+{% if nic.dhcp4 | default(false) %}
+    dhcp4: true
+{% else %}
+    dhcp4: false
+{% if nic.ip is not defined or nic.ip in [none, ''] %}
+    dhcp6: false
+    optional: true
+{% else %}
+    addresses:
+      - {{ nic.ip }}
+{% endif %}
+{% if nic.gw is defined and nic.gw not in [none, ''] %}
+    routes:
+      - to: default
+        via: {{ nic.gw }}
+{% endif %}
+{% if nic.dns is defined and nic.dns %}
+    nameservers:
+      addresses:
+{% for dns_server in nic.dns %}
+        - {{ dns_server }}
+{% endfor %}
+{% endif %}
+{% endif %}
+{% endfor %}
+{% set vlan_entries = [] %}
+{% for nic in vm_config.network_interfaces %}
+{% set parent_index = loop.index0 %}
+{% for vlan in nic.vlan_devices | default([]) %}
+{% set _ = vlan_entries.append({'parent_index': parent_index, 'vlan': vlan}) %}
+{% endfor %}
+{% endfor %}
+{% if vlan_entries | length > 0 %}
+vlans:
+{% for entry in vlan_entries %}
+  eth{{ entry.parent_index }}.{{ entry.vlan.id }}:
+    id: {{ entry.vlan.id }}
+    link: eth{{ entry.parent_index }}
+    addresses:
+      - {{ entry.vlan.ip }}
+{% if entry.vlan.gw is defined and entry.vlan.gw not in [none, ''] %}
+    routes:
+      - to: default
+        via: {{ entry.vlan.gw }}
+{% endif %}
+{% endfor %}
+{% endif %}

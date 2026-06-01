@@ -1,0 +1,158 @@
+---
+# =============================================================================
+# PHASE 1 — Proxmox VM creation
+# =============================================================================
+
+# Proxmox API endpoint.  Use Ansible Vault or --extra-vars for secrets.
+proxmox_api_host: <PROXMOX_API_HOST>
+proxmox_api_port: 8006
+proxmox_api_user: <PROXMOX_API_USER_WITH_REALM>
+proxmox_api_password: <PROXMOX_API_PASSWORD>
+proxmox_validate_certs: false
+proxmox_api_timeout: 300
+
+# Proxmox placement and template source.
+proxmox_node: <PROXMOX_NODE_NAME>
+template_vm_id: <TEMPLATE_VM_ID>
+template_vm_name: <TEMPLATE_VM_NAME>
+datastore_id: <DATASTORE_ID>
+cloudinit_drive_datastore_id: <DATASTORE_ID>
+snippet_datastore_id: local
+
+# Filesystem path on the Proxmox node where snippet_datastore_id stores files.
+snippet_directory: /var/lib/vz/snippets
+
+# SSH public key injected into the cloud-init user on every VM.
+ssh_public_key_path: ~/.ssh/id_rsa.pub
+cloud_init_user: ubuntu
+cloud_init_user_password: password
+
+# VM map.  Add/remove entries to match the CEs you want to attach.
+# Each entry key is an arbitrary Ansible identifier (not the VM name).
+# Management IP (first NIC) must match the ansible_host set in inventory.yaml.
+vms:
+  ce_node_1:
+    vm_name: <CE_NODE_1_VM_NAME>
+    vm_id: <CE_NODE_1_VM_ID>
+    # Must match the hostname of this VM in inventory.yaml under ce_nodes.
+    # Phase 1 uses this to patch ansible_host for DHCP VMs; Phase 3 uses it
+    # to look up the full NIC list when rendering the persistent netplan config.
+    inventory_hostname: <CE_NODE_1_HOSTNAME>
+    memory_mb: 32768
+    cores: 16
+    sockets: 1
+    disk_size_gb: 100
+    network_interfaces:
+      # NIC 0 — management / PCD commissioning interface.
+      # Use dhcp4: true for environments where the management IP is DHCP-assigned.
+      # When dhcp4: true, set qemu_agent_enabled: true (required for IP discovery)
+      # and set ansible_host: 0.0.0.0 in inventory.yaml (Phase 1 will override it).
+      - bridge: <PROXMOX_MGMT_BRIDGE>
+        vlan_id: <MGMT_VLAN_ID>
+        dhcp4: false
+        ip: <CE_NODE_1_MGMT_CIDR>       # e.g. 10.10.0.11/24 — ignored when dhcp4: true
+        gw: <MGMT_GATEWAY_IP>
+        dns:
+          - <DNS_SERVER>
+        vlan_devices: []
+      # NIC 1 — data / VM traffic interface (no IP configured at OS level).
+      - bridge: <PROXMOX_DATA_BRIDGE>
+        dhcp4: false
+        vlan_devices: []
+  ce_node_2:
+    vm_name: <CE_NODE_2_VM_NAME>
+    vm_id: <CE_NODE_2_VM_ID>
+    inventory_hostname: <CE_NODE_2_HOSTNAME>
+    memory_mb: 32768
+    cores: 16
+    sockets: 1
+    disk_size_gb: 100
+    network_interfaces:
+      - bridge: <PROXMOX_MGMT_BRIDGE>
+        vlan_id: <MGMT_VLAN_ID>
+        dhcp4: false
+        ip: <CE_NODE_2_MGMT_CIDR>       # e.g. 10.10.0.12/24
+        gw: <MGMT_GATEWAY_IP>
+        dns:
+          - <DNS_SERVER>
+        vlan_devices: []
+      - bridge: <PROXMOX_DATA_BRIDGE>
+        dhcp4: false
+        vlan_devices: []
+
+# VM behaviour flags.
+start_vms: true
+detach_cloudinit_drive: true
+clone_full: true
+disk_format: raw
+cpu_type: host
+scsi_controller: virtio-scsi-single
+boot_order: order=scsi0
+# Set to true when any VM uses dhcp4: true on NIC 0 — required for Phase 1
+# to discover the DHCP-assigned IP via the QEMU guest agent and patch the
+# in-memory inventory before Phases 2 and 3 run.
+qemu_agent_enabled: false
+
+# =============================================================================
+# PHASE 2 — PCD host commissioning via cloud-ctl
+# =============================================================================
+
+# PCD management URL (e.g. https://pcd.example.com or https://du.platform9.net)
+pcd_region_portal: <PCD_MANAGEMENT_URL>
+
+# PCD credentials.  Use Ansible Vault for production.
+pcd_username: <PCD_USERNAME>
+pcd_password: <PCD_PASSWORD>
+pcd_project_name: <PCD_PROJECT_NAME>    # typically "service"
+pcd_region_name: <PCD_REGION_NAME>
+
+# URL used to download the cloud-ctl binary.
+cloud_ctl_url: https://cloud-ctl.s3.us-west-1.amazonaws.com/cloud-ctl
+
+# Seconds to wait for CE nodes to become SSH-reachable after VM start.
+ce_ssh_wait_timeout: 300
+ce_ssh_wait_delay: 15
+
+# DHCP IP discovery — retries × delay gives the total wait window.
+# With defaults: 20 × 15s = 5 minutes for the QEMU agent to report an IP.
+dhcp_ip_discovery_retries: 20
+dhcp_ip_discovery_delay: 15
+
+# =============================================================================
+# PHASE 3 — CE VM netplan and NFS preparation
+# =============================================================================
+
+# Probe IP used to identify the internet-facing interface automatically.
+internet_probe_ip: "1.1.1.1"
+
+# Set to an explicit interface name to skip route-based auto-detection.
+internet_interface_name: ""
+
+# Data / secondary interfaces — OS-level names in NIC order starting from NIC 1.
+# Add one entry per additional NIC beyond the management interface.
+# e.g. two-NIC VM: [ens19]; three-NIC VM: [ens19, ens20]
+secondary_interface_names:
+  - ens19
+
+# Override auto-detected CIDR/gateway if needed.
+internet_interface_cidr: ""
+internet_gateway: ""
+
+# Optional hostname to apply; leave empty to keep the cloud-init hostname.
+ce_hostname: ""
+
+# Netplan target file.
+netplan_config_path: /etc/netplan/50-cloud-init.yaml
+
+# Nameservers rendered under the internet-facing interface in netplan.
+netplan_nameservers:
+  - <DNS_SERVER>
+
+# NFS entries required on CE nodes for image library and ephemeral storage.
+ce_fstab_entries:
+  - src: <NFS_SERVER>:/mnt/nfsshare/glance
+    path: /var/opt/imagelibrary/data
+    line: "<NFS_SERVER>:/mnt/nfsshare/glance      /var/opt/imagelibrary/data      nfs   vers=4,proto=tcp   0       0"
+  - src: <NFS_SERVER>:/mnt/nfsshare/ephemeral
+    path: /opt/data/instances
+    line: "<NFS_SERVER>:/mnt/nfsshare/ephemeral   /opt/data/instances             nfs   vers=4,proto=tcp   0       0"

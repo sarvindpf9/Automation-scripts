@@ -32,14 +32,34 @@
       - item.value.sockets >= 1
       - item.value.network_interfaces is sequence
       - item.value.network_interfaces | length > 0
-    fail_msg: "Each VM must define vm_name, vm_id, memory_mb, cores, sockets, and network_interfaces."
+      - item.value.inventory_hostname is defined
+      - item.value.inventory_hostname | length > 0
+    fail_msg: >-
+      VM {{ item.value.vm_name | default(item.key) }}: missing required fields.
+      Ensure vm_name, vm_id, memory_mb, cores, sockets, network_interfaces, and
+      inventory_hostname are all set. inventory_hostname must match the hostname
+      in inventory.yaml under ce_nodes.
   loop: "{{ vms | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
 
+- name: Assert QEMU guest agent enabled when management NIC uses DHCP
+  ansible.builtin.assert:
+    that:
+      - qemu_agent_enabled | bool
+    fail_msg: >-
+      VM {{ item.value.vm_name }}: management NIC (network_interfaces[0]) has
+      dhcp4: true but qemu_agent_enabled is false. Set qemu_agent_enabled: true
+      and confirm the QEMU guest agent is installed in the template image.
+      The guest agent is required for Phase 1 to discover the DHCP-assigned IP.
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: item.value.network_interfaces[0].dhcp4 | default(false)
+
 - name: Build list of declared VM IP addresses
   ansible.builtin.set_fact:
-    declared_vm_ips: "{{ lookup('ansible.builtin.template', playbook_dir + '/../templates/vm-ip-list.yml.j2') | from_yaml | default([], true) }}"
+    declared_vm_ips: "{{ lookup('ansible.builtin.template', playbook_dir + '/../templates/vm-ip-list.yml.j2') | from_yaml }}"
 
 - name: Validate VM identity and IP uniqueness
   ansible.builtin.assert:

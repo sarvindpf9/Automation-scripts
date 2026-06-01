@@ -1,0 +1,3 @@
+{% for nic in item.value.network_interfaces %}
+net{{ loop.index0 }}: "virtio,bridge={{ nic.bridge }}{% if nic.vlan_id is defined and nic.vlan_id not in [none, ''] %},tag={{ nic.vlan_id }}{% endif %}"
+{% endfor %}

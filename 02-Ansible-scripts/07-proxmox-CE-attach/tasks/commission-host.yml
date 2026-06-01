@@ -1,0 +1,36 @@
+---
+# Idempotent: skips commissioning if /etc/pf9/host_id.conf already exists,
+# which indicates the host has previously been registered with PCD.
+
+- name: Check for existing PCD host commission marker
+  ansible.builtin.stat:
+    path: /etc/pf9/host_id.conf
+  become: true
+  register: _host_id_conf
+
+- name: Commission host into PCD via cloud-ctl
+  when: not _host_id_conf.stat.exists
+  block:
+    - name: Configure cloud-ctl with PCD credentials
+      ansible.builtin.command: >-
+        cloud-ctl config set
+        -u '{{ pcd_region_portal }}'
+        -e '{{ pcd_username }}'
+        -p '{{ pcd_password }}'
+        -t '{{ pcd_project_name }}'
+        -r '{{ pcd_region_name }}'
+        --no-prompt
+        --verbose
+      become: true
+      no_log: true
+
+    - name: Run cloud-ctl prep-node to register and onboard host
+      ansible.builtin.command: >-
+        cloud-ctl prep-node
+        --skip-checks
+        --no-prompt
+        --verbose
+      become: true
+      # prep-node pulls and installs the host agent; allow up to 10 minutes.
+      async: 600
+      poll: 30

@@ -1,0 +1,33 @@
+---
+# Commission CE nodes into PCD using cloud-ctl.
+#
+# Requires the following variables in group_vars/all.yml (or Vault):
+#   pcd_region_portal, pcd_username, pcd_password,
+#   pcd_project_name, pcd_region_name
+#
+# The play waits for SSH to become available before proceeding, so it can be
+# run standalone after 01-create-vms.yml or chained via site.yml.
+
+- name: Download cloud-ctl and commission CE hosts into PCD
+  hosts: ce_nodes
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Wait for CE nodes to become reachable via SSH
+      ansible.builtin.wait_for_connection:
+        timeout: "{{ ce_ssh_wait_timeout }}"
+        delay: "{{ ce_ssh_wait_delay }}"
+
+    - name: Gather minimal facts needed for subsequent tasks
+      ansible.builtin.setup:
+        gather_subset:
+          - "!all"
+          - "!min"
+          - network
+
+    - name: Download latest cloud-ctl binary
+      ansible.builtin.import_tasks: ../tasks/cloud-ctl-download.yml
+
+    - name: Commission host into PCD
+      ansible.builtin.import_tasks: ../tasks/commission-host.yml

@@ -1,0 +1,34 @@
+---
+# Convert a DHCP-assigned interface to a static netplan entry.
+#
+# Required: run against the VM guest, not the Proxmox node.
+#
+# Variables (all optional):
+#   target_interface   - NIC to convert; defaults to the interface holding the default route
+#   netplan_config_file - netplan file to write; defaults to /etc/netplan/50-cloud-init.yaml
+#
+# Usage:
+#   # Single VM by IP (inline inventory):
+#   ansible-playbook playbooks/dhcp-to-static.yml \
+#     -i 192.168.100.21, \
+#     -u ubuntu --private-key ~/.ssh/id_rsa \
+#     -e ansible_become_pass=<sudo_password>
+#
+#   # Specific interface:
+#   ansible-playbook playbooks/dhcp-to-static.yml \
+#     -i 192.168.100.21, \
+#     -u ubuntu --private-key ~/.ssh/id_rsa \
+#     -e target_interface=ens18
+#
+#   # Override netplan file destination:
+#   ansible-playbook playbooks/dhcp-to-static.yml \
+#     -i 192.168.100.21, \
+#     -u ubuntu --private-key ~/.ssh/id_rsa \
+#     -e netplan_config_file=/etc/netplan/99-static.yaml
+
+- name: Convert DHCP interface to static via netplan
+  hosts: "{{ target_hosts | default('all') }}"
+  gather_facts: true
+  become: false
+  tasks:
+    - ansible.builtin.import_tasks: ../tasks/dhcp-to-static.yml

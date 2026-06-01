@@ -1,0 +1,174 @@
+---
+# Customise CE nodes after commissioning:
+#   - Set hostname (optional)
+#   - Detect/configure the internet-facing interface
+#   - Render persistent netplan configuration covering all declared NICs
+#   - Create NFS mount points and fstab entries
+
+- name: Prepare CE nodes — netplan, NFS mounts, and hostname
+  hosts: ce_nodes
+  gather_facts: true
+  become: true
+
+  tasks:
+    # Needed by 50-cloud-init.yaml.j2 to render all NICs, and by the vlan
+    # block to map parent interface names from secondary_interface_names.
+    - name: Resolve NIC list for this host from vms map
+      ansible.builtin.set_fact:
+        _this_vm_interfaces: >-
+          {{
+            (vms | dict2items
+             | selectattr('value.inventory_hostname', 'equalto', inventory_hostname)
+             | list | first).value.network_interfaces
+          }}
+
+    - name: Apply requested hostname
+      ansible.builtin.hostname:
+        name: "{{ ce_hostname }}"
+      when: ce_hostname | length > 0
+
+    - name: Ensure required runtime commands are present
+      ansible.builtin.shell: "command -v {{ item }}"
+      args:
+        executable: /bin/bash
+      changed_when: false
+      loop:
+        - ip
+        - netplan
+
+    - name: Detect route used for internet probe
+      ansible.builtin.command: "ip -j -4 route get {{ internet_probe_ip }}"
+      register: internet_route
+      changed_when: false
+      when: >
+        internet_interface_name | length == 0
+        or internet_interface_cidr | length == 0
+
+    - name: Parse detected internet route
+      ansible.builtin.set_fact:
+        ce_internet_route: "{{ (internet_route.stdout | from_json)[0] }}"
+      when: >
+        internet_interface_name | length == 0
+        or internet_interface_cidr | length == 0
+
+    - name: Derive internet interface name
+      ansible.builtin.set_fact:
+        ce_internet_interface: >-
+          {{
+            internet_interface_name
+            if internet_interface_name | length > 0
+            else ce_internet_route.dev
+          }}
+
+    - name: Read IPv4 details from internet interface
+      ansible.builtin.command: >-
+        ip -j -4 addr show dev {{ ce_internet_interface }}
+      register: internet_interface_addr
+      changed_when: false
+      when: internet_interface_cidr | length == 0
+
+    - name: Parse internet interface IPv4 details
+      ansible.builtin.set_fact:
+        ce_internet_addr_info: >-
+          {{
+            (
+              (internet_interface_addr.stdout | from_json)[0].addr_info
+              | selectattr('family', 'equalto', 'inet')
+              | list
+            )[0]
+          }}
+      when: internet_interface_cidr | length == 0
+
+    - name: Set internet interface CIDR
+      ansible.builtin.set_fact:
+        ce_internet_cidr: >-
+          {{
+            internet_interface_cidr
+            if internet_interface_cidr | length > 0
+            else ce_internet_addr_info.local
+            ~ '/'
+            ~ ce_internet_addr_info.prefixlen
+          }}
+
+    - name: Set internet gateway
+      ansible.builtin.set_fact:
+        ce_internet_gateway: >-
+          {{
+            internet_gateway
+            if internet_gateway | length > 0
+            else ansible_facts["default_ipv4"]["gateway"]
+          }}
+
+    # Emitted before the template task fires so operators can audit what will
+    # be locked in as static, especially important for DHCP-originated addresses.
+    - name: Report network configuration to be rendered as static
+      ansible.builtin.debug:
+        msg:
+          - "Host      : {{ inventory_hostname }}"
+          - "Interface : {{ ce_internet_interface }}"
+          - "CIDR      : {{ ce_internet_cidr }}"
+          - "Gateway   : {{ ce_internet_gateway }}"
+          - "Source    : {{ 'explicit (group_vars)' if internet_interface_cidr | length > 0 else 'auto-detected — current IP (DHCP lease) will be locked in as static' }}"
+
+    - name: Validate detected network values
+      ansible.builtin.assert:
+        that:
+          - ce_internet_interface | length > 0
+          - ce_internet_cidr | length > 0
+          - ce_internet_gateway | length > 0
+          - secondary_interface_names is sequence
+          - secondary_interface_names | length > 0
+          - ce_internet_interface not in secondary_interface_names
+        fail_msg: >-
+          Unable to derive a safe netplan configuration. Set
+          internet_interface_name, internet_interface_cidr, internet_gateway,
+          and secondary_interface_names explicitly in group_vars/all.yml.
+
+    - name: Ensure NFS mount directories exist
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop: "{{ ce_fstab_entries }}"
+
+    - name: Add required NFS entries to fstab
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        regexp: >-
+          ^{{ item.src | regex_escape }}\s+{{ item.path | regex_escape }}\s+
+        line: "{{ item.line }}"
+        owner: root
+        group: root
+        mode: "0644"
+        create: false
+        backup: true
+      loop: "{{ ce_fstab_entries }}"
+
+    - name: Render netplan configuration
+      ansible.builtin.template:
+        src: ../templates/50-cloud-init.yaml.j2
+        dest: "{{ netplan_config_path }}"
+        owner: root
+        group: root
+        mode: "0600"
+        backup: true
+      register: _netplan_changed
+
+    # Run netplan apply in the background (async: 10, poll: 0) so the SSH
+    # connection is not held open while the interface transitions from DHCP to
+    # static, which would cause a broken-pipe error.  wait_for_connection
+    # then re-establishes the session using the new static IP.
+    - name: Apply netplan (non-blocking to survive DHCP-to-static transition)
+      ansible.builtin.command: netplan apply
+      async: 10
+      poll: 0
+      changed_when: true
+      when: _netplan_changed.changed
+
+    - name: Reconnect after netplan apply
+      ansible.builtin.wait_for_connection:
+        timeout: 60
+        delay: 5
+      when: _netplan_changed.changed

@@ -65,6 +65,14 @@ vms:
           - <DNS_SERVER>
         vlan_devices: []
 
+# Nameservers written into the static netplan configuration by dhcp-to-static.yml.
+# Accepts a list of one or more IP addresses.
+# When omitted (commented out), the task falls back to addresses currently
+# reported by ansible_dns.nameservers on each target host.
+# nameservers:
+#   - <NS1_IP>
+#   - <NS2_IP>
+
 # VM behavior options.
 start_vms: true
 detach_cloudinit_drive: true
@@ -74,6 +82,8 @@ cpu_type: host
 scsi_controller: virtio-scsi-single
 boot_order: order=scsi0
 qemu_agent_enabled: false
+qemu_agent_fstrim_cloned_disks: true
+qemu_agent_freeze_fs_on_backup: true
 
 # Delete behavior used by playbooks/delete-vms.yml.
 delete_force: true

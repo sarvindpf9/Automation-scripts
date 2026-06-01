@@ -1,0 +1,102 @@
+---
+# Discover DHCP-assigned management IPs via the Proxmox QEMU guest agent and
+# update the in-memory Ansible inventory so Phases 2 and 3 can connect.
+#
+# Runs only for VM entries where network_interfaces[0].dhcp4 is true.
+# Prerequisites: qemu_agent_enabled: true in group_vars and the QEMU guest
+# agent installed in the template image.
+#
+# On completion, ansible_host for each DHCP VM's inventory_hostname is
+# updated to the first non-loopback IPv4 address reported by the agent.
+
+- name: Check if any VM uses DHCP on the management NIC
+  ansible.builtin.set_fact:
+    _has_dhcp_mgmt_nic: >-
+      {{
+        _has_dhcp_mgmt_nic | default(false)
+        or (item.value.network_interfaces[0].dhcp4 | default(false))
+      }}
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ item.value.vm_name }}"
+  delegate_to: localhost
+  become: false
+
+- name: Authenticate to Proxmox API for DHCP IP discovery
+  ansible.builtin.uri:
+    url: "https://{{ proxmox_api_host }}:{{ proxmox_api_port }}/api2/json/access/ticket"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      username: "{{ proxmox_api_user }}"
+      password: "{{ proxmox_api_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: _pve_ticket
+  delegate_to: localhost
+  become: false
+  no_log: true
+  when: (_has_dhcp_mgmt_nic | default(false)) and (start_vms | bool)
+
+# Polls until the guest agent reports at least one non-loopback IPv4 address.
+# Total wait window = dhcp_ip_discovery_retries × dhcp_ip_discovery_delay seconds.
+- name: Poll QEMU guest agent until management IPv4 appears — {{ item.value.vm_name }}
+  ansible.builtin.uri:
+    url: >-
+      https://{{ proxmox_api_host }}:{{ proxmox_api_port }}/api2/json/nodes/{{
+      proxmox_node }}/qemu/{{ item.value.vm_id }}/agent/network-get-interfaces
+    method: GET
+    headers:
+      Cookie: "PVEAuthCookie={{ _pve_ticket.json.data.ticket }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    status_code: [200]
+  register: _agent_net
+  until: >-
+    _agent_net.status == 200
+    and (
+      _agent_net.json.data.result
+      | rejectattr('name', 'equalto', 'lo')
+      | map(attribute='ip-addresses', default=[])
+      | flatten
+      | selectattr('ip-address-type', 'equalto', 'ipv4')
+      | list | length > 0
+    )
+  retries: "{{ dhcp_ip_discovery_retries | default(20) }}"
+  delay: "{{ dhcp_ip_discovery_delay | default(15) }}"
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ item.value.vm_name }}"
+  delegate_to: localhost
+  become: false
+  when:
+    - _has_dhcp_mgmt_nic | default(false)
+    - start_vms | bool
+    - item.value.network_interfaces[0].dhcp4 | default(false)
+
+# add_host updates ansible_host in the in-memory inventory only.
+# The change is not written back to inventory.yaml.
+- name: Update in-memory inventory with discovered DHCP management IP — {{ result.item.value.vm_name }}
+  ansible.builtin.add_host:
+    name: "{{ result.item.value.inventory_hostname }}"
+    groups: ce_nodes
+    ansible_host: >-
+      {{
+        (
+          result.json.data.result
+          | rejectattr('name', 'equalto', 'lo')
+          | map(attribute='ip-addresses', default=[])
+          | flatten
+          | selectattr('ip-address-type', 'equalto', 'ipv4')
+          | list | first
+        )['ip-address']
+      }}
+  loop: "{{ _agent_net.results | default([]) }}"
+  loop_control:
+    label: "{{ result.item.value.inventory_hostname }}"
+    loop_var: result
+  delegate_to: localhost
+  become: false
+  when:
+    - _has_dhcp_mgmt_nic | default(false)
+    - start_vms | bool
+    - result.item.value.network_interfaces[0].dhcp4 | default(false)
+    - not (result.skipped | default(false))

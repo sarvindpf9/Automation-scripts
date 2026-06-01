@@ -9,7 +9,6 @@
     api_user: "{{ proxmox_api_user }}"
     api_password: "{{ proxmox_api_password }}"
     validate_certs: "{{ proxmox_validate_certs }}"
-    api_timeout: "{{ proxmox_api_timeout }}"
     node: "{{ proxmox_node }}"
     vmid: "{{ item.value.vm_id }}"
     state: stopped
@@ -31,7 +30,6 @@
     api_user: "{{ proxmox_api_user }}"
     api_password: "{{ proxmox_api_password }}"
     validate_certs: "{{ proxmox_validate_certs }}"
-    api_timeout: "{{ proxmox_api_timeout }}"
     node: "{{ proxmox_node }}"
     vmid: "{{ item.value.vm_id }}"
     name: "{{ item.value.vm_name }}"

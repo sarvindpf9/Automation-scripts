@@ -1,0 +1,27 @@
+---
+all:
+  children:
+    # Proxmox node(s) used for VM creation via the API.
+    proxmox_nodes:
+      hosts:
+        proxmox-node-1:
+          ansible_host: <PROXMOX_NODE_HOSTNAME_OR_IP>
+          ansible_user: <PROXMOX_SSH_USER>
+
+    # CE VMs created in Phase 1.
+    # Each hostname here must match the inventory_hostname set in the vms map
+    # in group_vars/all.yml so Phase 3 can resolve the NIC list per host.
+    #
+    # Static IP VMs: set ansible_host to the management CIDR's host address
+    #   (the ip: field of network_interfaces[0] without the prefix length).
+    # DHCP VMs: set ansible_host to 0.0.0.0 — Phase 1 will discover the
+    #   actual IP via the QEMU guest agent and override it in-memory before
+    #   Phases 2 and 3 run.  Also set qemu_agent_enabled: true in group_vars.
+    ce_nodes:
+      hosts:
+        ce-node-1:
+          ansible_host: <CE_NODE_1_MGMT_IP_OR_0.0.0.0_FOR_DHCP>
+          ansible_user: <CE_SSH_USER>
+        ce-node-2:
+          ansible_host: <CE_NODE_2_MGMT_IP_OR_0.0.0.0_FOR_DHCP>
+          ansible_user: <CE_SSH_USER>
