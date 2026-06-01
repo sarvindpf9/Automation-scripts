@@ -1,0 +1,134 @@
+---
+- name: Query existing VMs on node
+  community.proxmox.proxmox_vm_info:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_password: "{{ proxmox_api_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    node: "{{ proxmox_node }}"
+  register: _proxmox_vm_info
+  delegate_to: localhost
+  become: false
+
+- name: Build set of existing VM IDs
+  ansible.builtin.set_fact:
+    existing_vmids: "{{ _proxmox_vm_info.proxmox_vms | map(attribute='vmid') | list }}"
+
+- name: Clone VMs from template
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_password: "{{ proxmox_api_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    api_timeout: "{{ proxmox_api_timeout }}"
+    node: "{{ proxmox_node }}"
+    clone: "{{ template_vm_name }}"
+    vmid: "{{ template_vm_id }}"
+    newid: "{{ item.value.vm_id }}"
+    name: "{{ item.value.vm_name }}"
+    storage: "{{ datastore_id }}"
+    full: "{{ clone_full }}"
+    format: "{{ disk_format }}"
+    timeout: "{{ proxmox_api_timeout }}"
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ item.value.vm_name }}"
+  when: item.value.vm_id not in existing_vmids
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Apply VM hardware and cloud-init configuration
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_password: "{{ proxmox_api_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    api_timeout: "{{ proxmox_api_timeout }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ item.value.vm_id }}"
+    name: "{{ item.value.vm_name }}"
+    cores: "{{ item.value.cores }}"
+    sockets: "{{ item.value.sockets }}"
+    cpu: "{{ cpu_type }}"
+    memory: "{{ item.value.memory_mb }}"
+    balloon: 0
+    scsihw: "{{ scsi_controller }}"
+    boot: "{{ boot_order }}"
+    agent: "{{ 1 if qemu_agent_enabled else 0 }}"
+    net: "{{ lookup('ansible.builtin.template', '../templates/proxmox-net.yml.j2') | from_yaml }}"
+    ide: "{{ {'ide2': cloudinit_drive_datastore_id + ':cloudinit,format=' + disk_format} if item.value.vm_id not in existing_vmids else omit }}"
+    cicustom: "user={{ snippet_datastore_id }}:snippets/{{ item.value.vm_name | regex_replace('[^a-zA-Z0-9-]', '-') }}-user-data.yaml,network={{ snippet_datastore_id }}:snippets/{{ item.value.vm_name | regex_replace('[^a-zA-Z0-9-]', '-') }}-network-data.yaml"
+    update: true
+    update_unsafe: true
+    state: present
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ item.value.vm_name }}"
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+# Resize the cloned disk to the target size. Specifying scsi0 in the apply
+# task above would allocate a second blank disk on the same slot, orphaning
+# the cloned disk and causing the VM to boot from an empty drive.
+- name: Resize root disk to target size
+  community.proxmox.proxmox_disk:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_password: "{{ proxmox_api_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    vmid: "{{ item.value.vm_id }}"
+    disk: scsi0
+    size: "{{ item.value.disk_size_gb }}G"
+    state: resized
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ item.value.vm_name }}"
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Start VMs
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_password: "{{ proxmox_api_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    api_timeout: "{{ proxmox_api_timeout }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ item.value.vm_id }}"
+    name: "{{ item.value.vm_name }}"
+    state: started
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ item.value.vm_name }}"
+  when: start_vms | bool
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Detach cloud-init drive after first boot
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_password: "{{ proxmox_api_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    api_timeout: "{{ proxmox_api_timeout }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ item.value.vm_id }}"
+    name: "{{ item.value.vm_name }}"
+    delete: ide2
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ item.value.vm_name }}"
+  when: (detach_cloudinit_drive | bool) and (item.value.vm_id not in existing_vmids)
+  delegate_to: localhost
+  become: false
+  no_log: true

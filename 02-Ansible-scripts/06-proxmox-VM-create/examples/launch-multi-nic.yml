@@ -1,0 +1,33 @@
+---
+# Example extra-vars file for launching one VM with multiple NICs.
+# net0 is used for management. net1 is attached to a trunk bridge and carries
+# guest VLAN subinterfaces rendered through cloud-init network-data.
+# Run with:
+#   ansible-playbook playbooks/create-vms.yml -e @examples/launch-multi-nic.yml
+
+ssh_public_key_path: ~/.ssh/id_rsa.pub
+cloud_init_user: ubuntu
+
+vms:
+  multi_nic_vm:
+    vm_name: <MULTI_NIC_VM_NAME>
+    vm_id: <MULTI_NIC_VM_ID>
+    memory_mb: 8192
+    cores: 4
+    sockets: 1
+    disk_size_gb: 100
+    network_interfaces:
+      - bridge: <PROXMOX_MANAGEMENT_BRIDGE>
+        vlan_id: <MANAGEMENT_VLAN_ID>
+        ip: <MANAGEMENT_CIDR_IP>
+        gw: <MANAGEMENT_GATEWAY_IP>
+        dns:
+          - <DNS_SERVER>
+        vlan_devices: []
+      - bridge: <PROXMOX_TRUNK_BRIDGE>
+        vlan_devices:
+          - id: <TENANT_VLAN_ID>
+            ip: <TENANT_CIDR_IP>
+          - id: <STORAGE_VLAN_ID>
+            ip: <STORAGE_CIDR_IP>
+

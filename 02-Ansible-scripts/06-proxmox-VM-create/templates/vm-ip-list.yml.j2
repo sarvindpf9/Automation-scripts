@@ -1,0 +1,13 @@
+---
+{% for vm_item in vms | dict2items %}
+{% for nic in vm_item.value.network_interfaces %}
+{% if nic.ip is defined and nic.ip not in [none, ''] %}
+- "{{ nic.ip | regex_replace('/.*$', '') }}"
+{% endif %}
+{% for vlan in nic.vlan_devices | default([]) %}
+{% if vlan.ip is defined and vlan.ip not in [none, ''] %}
+- "{{ vlan.ip | regex_replace('/.*$', '') }}"
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% endfor %}

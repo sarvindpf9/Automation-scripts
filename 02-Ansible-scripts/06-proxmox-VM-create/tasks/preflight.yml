@@ -1,0 +1,57 @@
+---
+- name: Validate required Proxmox variables
+  ansible.builtin.assert:
+    that:
+      - proxmox_api_host | length > 0
+      - proxmox_api_user | length > 0
+      - proxmox_api_password | length > 0
+      - proxmox_node | length > 0
+      - template_vm_id is number
+      - template_vm_name | length > 0
+      - datastore_id | length > 0
+      - cloudinit_drive_datastore_id | length > 0
+      - snippet_datastore_id | length > 0
+      - snippet_directory | length > 0
+      - vms is mapping
+      - vms | length > 0
+    fail_msg: "Fill in group_vars/all.yml placeholders before running the playbook."
+  no_log: true
+
+- name: Validate VM definitions
+  ansible.builtin.assert:
+    that:
+      - item.value.vm_name | length > 0
+      - item.value.vm_id is number
+      - item.value.vm_id >= 100
+      - item.value.vm_id <= 999999
+      - item.value.memory_mb is number
+      - item.value.memory_mb >= 512
+      - item.value.cores is number
+      - item.value.cores >= 1
+      - item.value.sockets is number
+      - item.value.sockets >= 1
+      - item.value.network_interfaces is sequence
+      - item.value.network_interfaces | length > 0
+    fail_msg: "Each VM must define vm_name, vm_id, memory_mb, cores, sockets, and network_interfaces."
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Build list of declared VM IP addresses
+  ansible.builtin.set_fact:
+    declared_vm_ips: "{{ lookup('ansible.builtin.template', playbook_dir + '/../templates/vm-ip-list.yml.j2') | from_yaml }}"
+
+- name: Validate VM identity and IP uniqueness
+  ansible.builtin.assert:
+    that:
+      - (vms | dict2items | map(attribute='value.vm_id') | list | unique | length) == (vms | length)
+      - (vms | dict2items | map(attribute='value.vm_name') | list | unique | length) == (vms | length)
+      - (declared_vm_ips | unique | length) == (declared_vm_ips | length)
+    fail_msg: "VM names, VM IDs, and all declared interface/VLAN IPs must be unique across the vms map."
+
+- name: Read SSH public key from controller
+  ansible.builtin.set_fact:
+    vm_ssh_public_key: "{{ lookup('ansible.builtin.file', ssh_public_key_path) }}"
+  delegate_to: localhost
+  become: false
+  run_once: true

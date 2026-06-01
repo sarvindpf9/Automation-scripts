@@ -1,0 +1,30 @@
+---
+- name: Validate required delete variables
+  ansible.builtin.assert:
+    that:
+      - proxmox_api_host | length > 0
+      - proxmox_api_user | length > 0
+      - proxmox_api_password | length > 0
+      - proxmox_node | length > 0
+      - snippet_directory | length > 0
+      - vms is mapping
+      - vms | length > 0
+    fail_msg: "Fill in Proxmox API details and the vms map before running delete-vms.yml."
+  no_log: true
+
+- name: Validate VM delete targets
+  ansible.builtin.assert:
+    that:
+      - item.value.vm_name | length > 0
+      - item.value.vm_id is number
+    fail_msg: "Each VM delete target must define vm_name and vm_id."
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Validate VM delete target uniqueness
+  ansible.builtin.assert:
+    that:
+      - (vms | dict2items | map(attribute='value.vm_id') | list | unique | length) == (vms | length)
+      - (vms | dict2items | map(attribute='value.vm_name') | list | unique | length) == (vms | length)
+    fail_msg: "VM names and VM IDs must be unique across the vms map."

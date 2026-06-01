@@ -1,0 +1,25 @@
+---
+# Example extra-vars file for launching one VM with a single tagged NIC.
+# Run with:
+#   ansible-playbook playbooks/create-vms.yml -e @examples/launch-single-nic.yml
+
+ssh_public_key_path: ~/.ssh/id_rsa.pub
+cloud_init_user: ubuntu
+
+vms:
+  single_nic_vm:
+    vm_name: <SINGLE_NIC_VM_NAME>
+    vm_id: <SINGLE_NIC_VM_ID>
+    memory_mb: 4096
+    cores: 4
+    sockets: 1
+    disk_size_gb: 50
+    network_interfaces:
+      - bridge: <PROXMOX_BRIDGE>
+        vlan_id: <VLAN_ID>
+        ip: <VM_CIDR_IP>
+        gw: <GATEWAY_IP>
+        dns:
+          - <DNS_SERVER>
+        vlan_devices: []
+

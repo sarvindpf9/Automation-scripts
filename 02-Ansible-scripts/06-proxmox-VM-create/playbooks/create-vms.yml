@@ -1,0 +1,15 @@
+---
+- name: Create Proxmox VMs from template
+  hosts: proxmox_nodes
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Run preflight checks
+      ansible.builtin.import_tasks: ../tasks/preflight.yml
+
+    - name: Render cloud-init snippets
+      ansible.builtin.import_tasks: ../tasks/render-snippets.yml
+
+    - name: Clone and configure VMs
+      ansible.builtin.import_tasks: ../tasks/clone-vms.yml

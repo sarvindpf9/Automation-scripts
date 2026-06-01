@@ -1,0 +1,12 @@
+---
+- name: Delete Proxmox VMs created from template
+  hosts: proxmox_nodes
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Run delete preflight checks
+      ansible.builtin.import_tasks: ../tasks/delete-preflight.yml
+
+    - name: Delete VMs
+      ansible.builtin.import_tasks: ../tasks/delete-vms.yml

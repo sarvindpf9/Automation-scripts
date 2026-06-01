@@ -1,0 +1,38 @@
+#cloud-config
+hostname: {{ vm_config.vm_name }}
+manage_etc_hosts: true
+users:
+  - name: {{ cloud_init_user }}
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - {{ vm_ssh_public_key }}
+chpasswd:
+  list: |
+    {{ cloud_init_user }}:{{ cloud_init_user_password }}
+  expire: false
+package_update: false
+write_files:
+  - path: /usr/local/bin/apply-netplan.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      IFACES=()
+      for v in $(ls /sys/bus/virtio/drivers/virtio_net/ 2>/dev/null | grep '^virtio[0-9]' | sort -V); do
+        iface=$(ls /sys/bus/virtio/drivers/virtio_net/${v}/net/ 2>/dev/null | head -1)
+        [ -n "${iface}" ] && IFACES+=("${iface}")
+      done
+
+      NETPLAN=/etc/netplan/50-cloud-init.yaml
+
+      for i in "${!IFACES[@]}"; do
+        REAL_IF="${IFACES[$i]}"
+        sed -i -E "s/(^|[^a-zA-Z0-9_])eth${i}([^a-zA-Z0-9_]|$)/\1${REAL_IF}\2/g" "${NETPLAN}"
+      done
+
+      chmod 600 "${NETPLAN}"
+      netplan apply
+runcmd:
+  - /usr/local/bin/apply-netplan.sh

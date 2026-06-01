@@ -1,0 +1,78 @@
+---
+# Proxmox API endpoint details. Use Ansible Vault or extra-vars for secrets.
+proxmox_api_host: <PROXMOX_API_HOST>
+proxmox_api_port: 8006
+proxmox_api_user: <PROXMOX_API_USER_WITH_REALM>
+proxmox_api_password: <PROXMOX_API_PASSWORD>
+proxmox_validate_certs: false
+proxmox_api_timeout: 300
+
+# Proxmox placement and template source.
+proxmox_node: <PROXMOX_NODE_NAME>
+template_vm_id: <TEMPLATE_VM_ID>
+template_vm_name: <TEMPLATE_VM_NAME>
+datastore_id: <DATASTORE_ID>
+cloudinit_drive_datastore_id: <DATASTORE_ID>
+snippet_datastore_id: local
+
+# Filesystem path on the Proxmox node for snippet_datastore_id.
+# For default local storage this is normally /var/lib/vz/snippets.
+snippet_directory: /var/lib/vz/snippets
+
+# SSH public key injected into the cloud-init user.
+ssh_public_key_path: ~/.ssh/id_rsa.pub
+cloud_init_user: ubuntu
+cloud_init_user_password: password
+
+# VM deployment map, equivalent to the Terraform vms map.
+vms:
+  vm1:
+    vm_name: <VM1_NAME>
+    vm_id: <VM1_ID>
+    memory_mb: 4096
+    cores: 4
+    sockets: 1
+    disk_size_gb: 50
+    network_interfaces:
+      - bridge: <PROXMOX_BRIDGE>
+        vlan_id: <VLAN_ID>
+        ip: <VM1_CIDR_IP>
+        gw: <GATEWAY_IP>
+        dns:
+          - <DNS_SERVER>
+        vlan_devices: []
+      - bridge: <PROXMOX_TRUNK_BRIDGE>
+        vlan_devices:
+          - id: <VLAN_ID>
+            ip: <VM1_VLAN_CIDR_IP>
+            gw: <GATEWAY_IP>
+  vm2:
+    vm_name: <VM2_NAME>
+    vm_id: <VM2_ID>
+    memory_mb: 4096
+    cores: 4
+    sockets: 1
+    disk_size_gb: 50
+    network_interfaces:
+      - bridge: <PROXMOX_BRIDGE>
+        vlan_id: <VLAN_ID>
+        ip: <VM2_CIDR_IP>
+        gw: <GATEWAY_IP>
+        dns:
+          - <DNS_SERVER>
+        vlan_devices: []
+
+# VM behavior options.
+start_vms: true
+detach_cloudinit_drive: true
+clone_full: true
+disk_format: raw
+cpu_type: host
+scsi_controller: virtio-scsi-single
+boot_order: order=scsi0
+qemu_agent_enabled: false
+
+# Delete behavior used by playbooks/delete-vms.yml.
+delete_force: true
+delete_purge: true
+delete_remove_snippets: true
