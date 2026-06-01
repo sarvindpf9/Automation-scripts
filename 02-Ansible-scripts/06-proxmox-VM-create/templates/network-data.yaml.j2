@@ -2,6 +2,9 @@ version: 2
 ethernets:
 {% for nic in vm_config.network_interfaces %}
   eth{{ loop.index0 }}:
+{% if nic.dhcp4 | default(false) %}
+    dhcp4: true
+{% else %}
     dhcp4: false
 {% if nic.ip is not defined or nic.ip in [none, ''] %}
     dhcp6: false
@@ -21,6 +24,7 @@ ethernets:
 {% for dns_server in nic.dns %}
         - {{ dns_server }}
 {% endfor %}
+{% endif %}
 {% endif %}
 {% endfor %}
 {% set vlan_entries = [] %}

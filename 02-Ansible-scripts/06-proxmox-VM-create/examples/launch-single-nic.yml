@@ -23,3 +23,19 @@ vms:
           - <DNS_SERVER>
         vlan_devices: []
 
+  # DHCP variant: omit ip/gw/dns and set dhcp4: true.
+  # The assigned IP will not appear in the vm-ip-list output since it is
+  # unknown at deploy time.
+  single_nic_dhcp_vm:
+    vm_name: <DHCP_VM_NAME>
+    vm_id: <DHCP_VM_ID>
+    memory_mb: 4096
+    cores: 4
+    sockets: 1
+    disk_size_gb: 50
+    network_interfaces:
+      - bridge: <PROXMOX_BRIDGE>
+        vlan_id: <VLAN_ID>
+        dhcp4: true
+        vlan_devices: []
+
