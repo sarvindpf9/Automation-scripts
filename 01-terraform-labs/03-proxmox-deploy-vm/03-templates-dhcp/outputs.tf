@@ -46,7 +46,7 @@ output "terraform_outputs_summary" {
     total_vms_deployed  = length(module.proxmox_vms)
     vm_names            = [for vm in module.proxmox_vms : vm.vm_name]
     ansible_inventory   = local_file.ansible_inventory.filename
-    primary_ips = { for key, vm in module.proxmox_vms : vm.vm_name => vm.primary_ip }
+    primary_ips         = { for key, vm in module.proxmox_vms : vm.vm_name => vm.primary_ip }
     deployment_complete = "true"
   }
 }

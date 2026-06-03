@@ -5,11 +5,84 @@ terraform {
       source  = "bpg/proxmox"
       version = "~> 0.66"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
+    }
   }
 }
 
 locals {
   vm_name_slug = replace(var.vm_config.vm_name, "/[^a-zA-Z0-9-]/", "-")
+  network_interfaces = [
+    for nic in var.vm_config.network_interfaces : merge(nic, {
+      effective_ip_mode = nic.ip_mode != null ? nic.ip_mode : nic.ip != null ? "static" : "none"
+    })
+  ]
+  requires_guest_agent = anytrue([
+    for nic in local.network_interfaces : nic.effective_ip_mode == "dhcp"
+  ])
+}
+
+# Pre-flight check: abort before the clone starts if the target VM ID already
+# exists anywhere in the Proxmox cluster. Without this, Proxmox can create part
+# of the clone and fail while writing
+# the config, but Terraform times out and never records it in state — leaving
+# an orphaned VM that blocks every subsequent apply with a "File exists" error.
+resource "null_resource" "vm_id_precheck" {
+  triggers = {
+    vm_id     = var.vm_config.vm_id
+    node_name = var.proxmox_node
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-EOT
+      set -euo pipefail
+
+      ticket_resp=$(curl -sf -k -X POST \
+        --data-urlencode "username=${var.proxmox_api_username}" \
+        --data-urlencode "password=${var.proxmox_api_password}" \
+        "${var.proxmox_url}/api2/json/access/ticket")
+
+      ticket=$(printf '%s' "$${ticket_resp}" \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["ticket"])')
+
+      cluster_vms=$(curl -sf -k \
+        -b "PVEAuthCookie=$${ticket}" \
+        "${var.proxmox_url}/api2/json/cluster/resources?type=vm")
+
+      existing_vm=$(printf '%s' "$${cluster_vms}" | python3 -c '
+import json
+import sys
+
+target = int("${var.vm_config.vm_id}")
+for item in json.load(sys.stdin)["data"]:
+    if item.get("vmid") == target:
+        node = item.get("node", "<unknown-node>")
+        name = item.get("name", "<unknown-name>")
+        print(f"{node}/{target} {name}")
+        break
+')
+
+      if [ -n "$${existing_vm}" ]; then
+        echo ""
+        echo "ERROR: VM ID ${var.vm_config.vm_id} already exists in the Proxmox cluster: $${existing_vm}"
+        echo ""
+        echo "This is likely an orphan from a previous failed apply where the clone"
+        echo "completed on Proxmox but Terraform timed out before writing state."
+        echo ""
+        echo "Resolution options:"
+        echo "  A) If the VM booted correctly, import it into Terraform state:"
+        echo "     terraform import 'module.proxmox_vms[\"<key>\"].proxmox_virtual_environment_vm.vm' ${var.proxmox_node}/${var.vm_config.vm_id}"
+        echo ""
+        echo "  B) If the VM is a partial/stale clone, destroy it and re-apply:"
+        echo "     ssh root@<proxmox-node> 'qm stop ${var.vm_config.vm_id} --skiplock; qm destroy ${var.vm_config.vm_id} --purge'"
+        echo ""
+        exit 1
+      fi
+    EOT
+  }
 }
 
 # Generate secure random password for VM (stored in Terraform state)
@@ -70,6 +143,7 @@ resource "proxmox_virtual_environment_file" "user_data" {
             chmod 600 "$NETPLAN"
             netplan apply
       runcmd:
+        - systemctl enable --now qemu-guest-agent || true
         - /usr/local/bin/apply-netplan.sh
     EOF
   }
@@ -86,44 +160,50 @@ resource "proxmox_virtual_environment_file" "network_data" {
     data      = <<-EOF
       version: 2
       ethernets:
-      %{~ for idx, nic in var.vm_config.network_interfaces}
+      %{~for idx, nic in local.network_interfaces}
         eth${idx}:
-          dhcp4: false
-      %{~ if nic.ip == null}
+      %{~if nic.effective_ip_mode == "dhcp"}
+          dhcp4: true
           dhcp6: false
           optional: true
-      %{~ endif}
-      %{~ if nic.ip != null}
+      %{~else}
+          dhcp4: false
+      %{~if nic.effective_ip_mode == "none"}
+          dhcp6: false
+          optional: true
+      %{~endif}
+      %{~if nic.effective_ip_mode == "static"}
           addresses:
             - ${nic.ip}
-      %{~ endif}
-      %{~ if nic.gw != null}
+      %{~endif}
+      %{~endif}
+      %{~if nic.gw != null}
           routes:
             - to: default
               via: ${nic.gw}
-      %{~ endif}
-      %{~ if nic.dns != null}
+      %{~endif}
+      %{~if nic.dns != null}
           nameservers:
             addresses: ${jsonencode(nic.dns)}
-      %{~ endif}
-      %{~ endfor}
-      %{~ if anytrue([for nic in var.vm_config.network_interfaces : length(nic.vlan_devices) > 0])}
+      %{~endif}
+      %{~endfor}
+      %{~if anytrue([for nic in local.network_interfaces : length(nic.vlan_devices) > 0])}
       vlans:
-      %{~ for idx, nic in var.vm_config.network_interfaces}
-      %{~ for vdev in nic.vlan_devices}
+      %{~for idx, nic in local.network_interfaces}
+      %{~for vdev in nic.vlan_devices}
         eth${idx}.${vdev.id}:
           id: ${vdev.id}
           link: eth${idx}
           addresses:
             - ${vdev.ip}
-      %{~ if vdev.gw != null}
+      %{~if vdev.gw != null}
           routes:
             - to: default
               via: ${vdev.gw}
-      %{~ endif}
-      %{~ endfor}
-      %{~ endfor}
-      %{~ endif}
+      %{~endif}
+      %{~endfor}
+      %{~endfor}
+      %{~endif}
     EOF
   }
 }
@@ -132,7 +212,7 @@ resource "proxmox_virtual_environment_file" "network_data" {
 resource "proxmox_virtual_environment_vm" "vm" {
   vm_id       = var.vm_config.vm_id
   name        = var.vm_config.vm_name
-  description = "Deployed via Terraform from Ubuntu 24 template (IP ${var.vm_config.network_interfaces[0].ip != null ? split("/", var.vm_config.network_interfaces[0].ip)[0] : "N/A"})"
+  description = "Deployed via Terraform from Ubuntu 24 template (IP ${local.network_interfaces[0].effective_ip_mode == "dhcp" ? "DHCP" : local.network_interfaces[0].ip != null ? split("/", local.network_interfaces[0].ip)[0] : "N/A"})"
   node_name   = var.proxmox_node
 
   # Clone from template
@@ -158,7 +238,7 @@ resource "proxmox_virtual_environment_vm" "vm" {
   # Network interfaces — one proxmox NIC per entry in network_interfaces list
   # vlan_id = null means untagged port (no VLAN tag applied by the provider)
   dynamic "network_device" {
-    for_each = var.vm_config.network_interfaces
+    for_each = local.network_interfaces
     content {
       bridge  = network_device.value.bridge
       vlan_id = network_device.value.vlan_id
@@ -184,7 +264,16 @@ resource "proxmox_virtual_environment_vm" "vm" {
 
   # QEMU Guest Agent
   agent {
-    enabled = false
+    enabled = true
+    timeout = "15m"
+
+    dynamic "wait_for_ip" {
+      for_each = local.requires_guest_agent ? [1] : []
+
+      content {
+        ipv4 = true
+      }
+    }
   }
 
   # Start VM immediately after creation
@@ -193,8 +282,11 @@ resource "proxmox_virtual_environment_vm" "vm" {
   # Boot configuration
   boot_order = ["scsi0"]
 
-  # Template has no QEMU guest agent — skip waiting for agent/IP readiness
-  timeout_start_vm = 60
+  # Static-only VMs keep IP waiting disabled. DHCP VMs require qemu-guest-agent
+  # in the template so Terraform can learn the assigned IP.
+  # 900s (15 min) matches the agent timeout above; 60s is too short for first-boot
+  # cloud-init and leaves an orphaned VM config in Proxmox on timeout.
+  timeout_start_vm = 900
 
   # Lifecycle management
   lifecycle {
@@ -205,22 +297,36 @@ resource "proxmox_virtual_environment_vm" "vm" {
   }
 
   depends_on = [
+    null_resource.vm_id_precheck,
     proxmox_virtual_environment_file.user_data,
     proxmox_virtual_environment_file.network_data,
   ]
 }
 
 # Detach cloud-init drive after first boot — cloud-init has already run by this point.
-# Uses the Proxmox API via curl; requires no SSH access to the VM itself.
+# Uses username/password API auth to avoid requiring a Proxmox API token.
 resource "null_resource" "detach_cloudinit_drive" {
   triggers = {
     vm_id = proxmox_virtual_environment_vm.vm.vm_id
   }
 
   provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+
     command = <<-EOT
+      set -euo pipefail
+
+      ticket_response=$(curl -s -k -X POST \
+        --data-urlencode "username=${var.proxmox_api_username}" \
+        --data-urlencode "password=${var.proxmox_api_password}" \
+        "${var.proxmox_url}/api2/json/access/ticket")
+
+      ticket=$(printf '%s' "$${ticket_response}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["data"]["ticket"])')
+      csrf_token=$(printf '%s' "$${ticket_response}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["data"]["CSRFPreventionToken"])')
+
       curl -s -k -X PUT \
-        -H "Authorization: PVEAPIToken=${var.proxmox_api_token}" \
+        -b "PVEAuthCookie=$${ticket}" \
+        -H "CSRFPreventionToken: $${csrf_token}" \
         "${var.proxmox_url}/api2/json/nodes/${var.proxmox_node}/qemu/${var.vm_config.vm_id}/config" \
         -d "delete=ide2"
     EOT

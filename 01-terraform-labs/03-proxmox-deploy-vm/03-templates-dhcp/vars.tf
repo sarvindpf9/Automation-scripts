@@ -3,8 +3,13 @@ variable "proxmox_url" {
   type        = string
 }
 
-variable "proxmox_api_token" {
-  description = "Proxmox API token (format: USER@REALM!TOKEN_ID=SECRET)"
+variable "proxmox_api_username" {
+  description = "Proxmox API username with realm (e.g., root@pam)"
+  type        = string
+}
+
+variable "proxmox_api_password" {
+  description = "Proxmox API password for proxmox_api_username"
   type        = string
   sensitive   = true
 }
@@ -69,18 +74,19 @@ variable "vms" {
     # List of NICs in PCI slot order — first entry is primary (default route)
     network_interfaces = list(object({
       bridge  = string
-      vlan_id = optional(number)  # omit or set null for untagged port
-      ip      = optional(string) # omit or set null for trunk ports (VLAN-only NICs)
+      vlan_id = optional(number) # omit or set null for untagged port
+      ip_mode = optional(string) # static, dhcp, or none; inferred from ip when omitted
+      ip      = optional(string) # required when ip_mode is static
       gw      = optional(string)
       dns     = optional(list(string))
       vlan_devices = optional(list(object({
-        id  = number
-        ip  = string
-        gw  = optional(string)
+        id = number
+        ip = string
+        gw = optional(string)
       })), [])
     }))
   }))
-  
+
   validation {
     condition = alltrue([
       for vm in var.vms : vm.vm_id >= 100 && vm.vm_id <= 999999
@@ -100,5 +106,23 @@ variable "vms" {
       for vm in var.vms : vm.memory_mb >= 512 && vm.memory_mb <= 32768
     ])
     error_message = "Memory must be between 512MB and 32768MB (32GB)."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for vm in var.vms : [
+        for nic in vm.network_interfaces : nic.ip_mode == null || contains(["static", "dhcp", "none"], nic.ip_mode)
+      ]
+    ]))
+    error_message = "Each network interface ip_mode must be one of: static, dhcp, none."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for vm in var.vms : [
+        for nic in vm.network_interfaces : nic.ip_mode != "static" || nic.ip != null
+      ]
+    ]))
+    error_message = "Each network interface using ip_mode static must set ip."
   }
 }

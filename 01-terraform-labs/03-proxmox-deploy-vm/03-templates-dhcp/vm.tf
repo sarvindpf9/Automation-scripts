@@ -5,7 +5,8 @@ module "proxmox_vms" {
 
   proxmox_node         = var.proxmox_node
   proxmox_url          = var.proxmox_url
-  proxmox_api_token    = var.proxmox_api_token
+  proxmox_api_username = var.proxmox_api_username
+  proxmox_api_password = var.proxmox_api_password
   template_vm_id       = local.template_vm_id
   datastore_id         = local.datastore_id
   snippet_datastore_id = var.snippet_datastore_id

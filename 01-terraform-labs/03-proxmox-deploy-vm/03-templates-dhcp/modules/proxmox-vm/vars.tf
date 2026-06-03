@@ -33,14 +33,15 @@ variable "vm_config" {
     # List of NICs in PCI slot order — first entry is primary (default route)
     network_interfaces = list(object({
       bridge  = string
-      vlan_id = optional(number)  # omit or set null for untagged port
-      ip      = optional(string) # omit or set null for trunk ports (VLAN-only NICs)
+      vlan_id = optional(number) # omit or set null for untagged port
+      ip_mode = optional(string) # static, dhcp, or none; inferred from ip when omitted
+      ip      = optional(string) # required when ip_mode is static
       gw      = optional(string)
       dns     = optional(list(string))
       vlan_devices = optional(list(object({
-        id  = number
-        ip  = string
-        gw  = optional(string)
+        id = number
+        ip = string
+        gw = optional(string)
       })), [])
     }))
   })
@@ -57,8 +58,13 @@ variable "proxmox_url" {
   type        = string
 }
 
-variable "proxmox_api_token" {
-  description = "Proxmox API token (format: USER@REALM!TOKEN_ID=SECRET)"
+variable "proxmox_api_username" {
+  description = "Proxmox API username with realm (e.g., root@pam)"
+  type        = string
+}
+
+variable "proxmox_api_password" {
+  description = "Proxmox API password for proxmox_api_username"
   type        = string
   sensitive   = true
 }
