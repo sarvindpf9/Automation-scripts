@@ -10,6 +10,8 @@ Ansible playbooks to clone Proxmox VMs from an existing template, render cloud-i
 ├── inventory.yaml
 ├── requirements.txt
 ├── requirements.yml
+├── scripts/
+│   └── build-dhcp-inventory.py  # build generated guest inventory from Proxmox/QGA data
 ├── examples/
 │   ├── launch-multi-nic.yml
 │   └── launch-single-nic.yml
@@ -23,6 +25,7 @@ Ansible playbooks to clone Proxmox VMs from an existing template, render cloud-i
 │   ├── delete-preflight.yml
 │   ├── delete-vms.yml
 │   ├── dhcp-to-static.yml         # task file used by playbooks/dhcp-to-static.yml
+│   ├── generate-guest-inventory.yml
 │   ├── preflight.yml
 │   └── render-snippets.yml
 └── templates/
@@ -44,10 +47,40 @@ Ansible playbooks to clone Proxmox VMs from an existing template, render cloud-i
 
 ## Setup
 
+### Prepare the control node
+
+Create a local Python virtual environment in this template directory and install all Python dependencies inside it. Keep the venv activated whenever you run `ansible-playbook`, `ansible-galaxy`, or `ansible-lint` for this template.
+
 ```bash
 cd 02-Ansible-scripts/06-proxmox-VM-create
+
+# Create and activate an isolated local environment.
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Keep packaging tools current inside the venv, then install controller deps.
+python3 -m pip install --upgrade pip setuptools wheel
 python3 -m pip install -r requirements.txt
+
+# Install the required Ansible collection.
 ansible-galaxy collection install -r requirements.yml
+```
+
+Verify the control-node environment:
+
+```bash
+source .venv/bin/activate
+ansible --version
+ansible-galaxy collection list community.proxmox
+python3 -c "import proxmoxer, requests; print('controller Python dependencies OK')"
+ansible-playbook --syntax-check playbooks/create-vms.yml
+```
+
+If you open a new shell, reactivate the venv before running the playbooks:
+
+```bash
+cd 02-Ansible-scripts/06-proxmox-VM-create
+source .venv/bin/activate
 ```
 
 ### Filling in group_vars/all.yml
@@ -280,7 +313,7 @@ ansible-playbook playbooks/create-vms.yml -e @staging-cluster.yml
 
 ### `playbooks/create-vms.yml`
 
-Clones and configures VMs on the target Proxmox node using `tasks/preflight.yml`, `tasks/render-snippets.yml`, and `tasks/clone-vms.yml`.
+Clones and configures VMs on the target Proxmox node using `tasks/preflight.yml`, `tasks/render-snippets.yml`, and `tasks/clone-vms.yml`. When `generated_guest_inventory_enabled: true`, it then runs `tasks/generate-guest-inventory.yml` to write a guest inventory with static IPs from `vms` and DHCP IPs from QEMU Guest Agent data.
 
 ### `playbooks/delete-vms.yml`
 
@@ -319,6 +352,13 @@ Runs against guest VMs (not the Proxmox node) to convert a DHCP-assigned interfa
 | `qemu_agent_enabled` | No | Enable the QEMU Guest Agent in the VM config; default `false` |
 | `qemu_agent_fstrim_cloned_disks` | No | Run guest-trim after a disk move or migration; default `true`, takes effect only when `qemu_agent_enabled: true` |
 | `qemu_agent_freeze_fs_on_backup` | No | Freeze/thaw guest filesystems for consistent snapshots; default `true`, takes effect only when `qemu_agent_enabled: true` |
+| `generated_guest_inventory_enabled` | No | Build `generated_guest_inventory_path` after VM creation; default `true` |
+| `generated_guest_inventory_path` | No | Generated guest inventory path relative to this directory, default `generated/vm-inventory.yml` |
+| `generated_guest_inventory_user` | No | SSH user written into the generated guest inventory, default `ubuntu` |
+| `generated_guest_inventory_ssh_private_key_path` | No | Local private key path written into the generated guest inventory. Leave empty to derive it from `ssh_public_key_path` by removing `.pub`. |
+| `guest_agent_inventory_initial_delay_seconds` | No | Delay before QGA polling starts for DHCP VMs, default `90` |
+| `guest_agent_inventory_max_wait_seconds` | No | Maximum QGA polling window for DHCP IP discovery, default `900` |
+| `guest_agent_inventory_poll_interval_seconds` | No | Poll interval for QGA DHCP IP discovery, default `10` |
 
 ## VM customization
 
@@ -345,6 +385,8 @@ ethernets:
 ```
 
 DHCP can be combined with static addressing on other NICs in the same VM — see the [mixed example](#launch-example-dhcp-on-one-nic-static-on-another) below.
+
+When `generated_guest_inventory_enabled: true`, DHCP inventory generation requires `qemu_agent_enabled: true` and `qemu-guest-agent` running inside the template/guest. The helper script queries Proxmox VM config to map DHCP `netN` entries to MAC addresses, then queries `/agent/network-get-interfaces` and selects the non-loopback IPv4 address from the matching guest interface. This avoids using `127.0.0.1` or an IP from the wrong static/VLAN interface.
 
 **When to use DHCP vs static:**
 
@@ -504,6 +546,36 @@ ansible-playbook playbooks/create-vms.yml -e qemu_agent_enabled=true
 qemu_agent_enabled: true
 qemu_agent_fstrim_cloned_disks: true   # default; listed explicitly for clarity
 qemu_agent_freeze_fs_on_backup: true   # default; listed explicitly for clarity
+```
+
+### Generated guest inventory for DHCP VMs
+
+With `generated_guest_inventory_enabled: true`, `playbooks/create-vms.yml` writes an inventory after the clone/start tasks complete:
+
+```yaml
+generated_guest_inventory_enabled: true
+generated_guest_inventory_path: generated/vm-inventory.yml
+generated_guest_inventory_user: ubuntu
+generated_guest_inventory_ssh_private_key_path: ""
+guest_agent_inventory_initial_delay_seconds: 90
+guest_agent_inventory_max_wait_seconds: 900
+guest_agent_inventory_poll_interval_seconds: 10
+```
+
+For static VMs, the generated inventory uses the first NIC `ip` value from `vms`. For DHCP VMs, it polls QEMU Guest Agent and writes the resolved address. If `generated_guest_inventory_ssh_private_key_path` is empty or accidentally set to a `.pub` file, the generator writes the matching private key path without the `.pub` suffix. The generated file is ignored by Git because it contains environment-specific VM IPs and local SSH key paths.
+
+Example generated host entry:
+
+```yaml
+all:
+  children:
+    proxmox_vms:
+      hosts:
+        "vm-01":
+          ansible_host: "192.168.100.50"
+          ansible_user: "ubuntu"
+          ansible_ssh_private_key_file: "~/.ssh/id_rsa"
+          ansible_python_interpreter: "/usr/bin/python3"
 ```
 
 To disable fstrim without disabling the agent entirely (e.g. on thick-provisioned storage where fstrim serves no purpose):

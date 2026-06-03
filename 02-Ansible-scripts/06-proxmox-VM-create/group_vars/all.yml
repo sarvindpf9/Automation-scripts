@@ -85,6 +85,17 @@ qemu_agent_enabled: false
 qemu_agent_fstrim_cloned_disks: true
 qemu_agent_freeze_fs_on_backup: true
 
+# Generated guest inventory. Static primary IPs are read from vms; DHCP primary
+# IPs require qemu_agent_enabled: true and qemu-guest-agent running in the VM.
+generated_guest_inventory_enabled: true
+generated_guest_inventory_path: generated/vm-inventory.yml
+generated_guest_inventory_user: ubuntu
+# Leave empty to derive from ssh_public_key_path by removing the .pub suffix.
+generated_guest_inventory_ssh_private_key_path: ""
+guest_agent_inventory_initial_delay_seconds: 90
+guest_agent_inventory_max_wait_seconds: 900
+guest_agent_inventory_poll_interval_seconds: 10
+
 # Delete behavior used by playbooks/delete-vms.yml.
 delete_force: true
 delete_purge: true

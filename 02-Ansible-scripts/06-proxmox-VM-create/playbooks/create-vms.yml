@@ -13,3 +13,7 @@
 
     - name: Clone and configure VMs
       ansible.builtin.import_tasks: ../tasks/clone-vms.yml
+
+    - name: Generate guest inventory
+      ansible.builtin.import_tasks: ../tasks/generate-guest-inventory.yml
+      when: generated_guest_inventory_enabled | bool
