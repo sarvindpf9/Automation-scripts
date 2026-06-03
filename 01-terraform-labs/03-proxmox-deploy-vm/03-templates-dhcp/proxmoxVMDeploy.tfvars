@@ -9,6 +9,12 @@ template_vm_id       = 100
 datastore_id         = "local-1TB"
 snippet_datastore_id = "local"
 ssh_public_key_path  = "~/.ssh/homelab-key.pub"
+
+# The template resets machine-id and reboots once on first boot, so wait before
+# polling QEMU guest agent for the DHCP address.
+# guest_agent_ip_initial_delay_seconds = 90
+# guest_agent_ip_max_wait_seconds      = 900
+
 vms = {
   "vm1" = {
     vm_name   = "u24-test-server"

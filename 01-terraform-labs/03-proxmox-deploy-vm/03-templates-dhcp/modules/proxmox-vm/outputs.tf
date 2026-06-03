@@ -12,7 +12,13 @@ output "primary_ip" {
   description = "Primary IP address without CIDR; learned from QEMU guest agent for DHCP"
   value = (
     local.network_interfaces[0].effective_ip_mode == "dhcp"
-    ? try(proxmox_virtual_environment_vm.vm.ipv4_addresses[0][0], "")
+    ? try(
+      jsondecode(data.local_file.primary_ip[0].content).primary_ip,
+      try([
+        for ip in flatten(proxmox_virtual_environment_vm.vm.ipv4_addresses) : ip
+        if !startswith(ip, "127.") && !startswith(ip, "169.254.") && ip != "0.0.0.0"
+      ][0], "")
+    )
     : local.network_interfaces[0].ip != null ? split("/", local.network_interfaces[0].ip)[0] : ""
   )
 }

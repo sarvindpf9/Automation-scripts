@@ -68,3 +68,15 @@ variable "proxmox_api_password" {
   type        = string
   sensitive   = true
 }
+
+variable "guest_agent_ip_initial_delay_seconds" {
+  description = "Initial delay before querying QEMU guest agent for DHCP IP; allows templates with first-boot machine-id reset/reboot to settle"
+  type        = number
+  default     = 90
+}
+
+variable "guest_agent_ip_max_wait_seconds" {
+  description = "Maximum time to poll QEMU guest agent for a non-loopback DHCP IPv4 address"
+  type        = number
+  default     = 900
+}

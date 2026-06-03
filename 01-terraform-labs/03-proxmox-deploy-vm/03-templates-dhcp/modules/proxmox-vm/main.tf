@@ -9,6 +9,10 @@ terraform {
       source  = "hashicorp/null"
       version = "~> 3.0"
     }
+    local = {
+      source  = "hashicorp/local"
+      version = "~> 2.4"
+    }
   }
 }
 
@@ -22,6 +26,7 @@ locals {
   requires_guest_agent = anytrue([
     for nic in local.network_interfaces : nic.effective_ip_mode == "dhcp"
   ])
+  primary_ip_file = "${path.module}/.terraform/generated/${local.vm_name_slug}-${var.vm_config.vm_id}-primary-ip.json"
 }
 
 # Pre-flight check: abort before the clone starts if the target VM ID already
@@ -301,6 +306,88 @@ resource "proxmox_virtual_environment_vm" "vm" {
     proxmox_virtual_environment_file.user_data,
     proxmox_virtual_environment_file.network_data,
   ]
+}
+
+resource "null_resource" "wait_for_primary_ip" {
+  count = local.network_interfaces[0].effective_ip_mode == "dhcp" ? 1 : 0
+
+  triggers = {
+    vm_id                 = proxmox_virtual_environment_vm.vm.vm_id
+    initial_delay_seconds = var.guest_agent_ip_initial_delay_seconds
+    max_wait_seconds      = var.guest_agent_ip_max_wait_seconds
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+
+    command = <<-EOT
+      set -euo pipefail
+
+      mkdir -p "$(dirname "${local.primary_ip_file}")"
+
+      if [ "${var.guest_agent_ip_initial_delay_seconds}" -gt 0 ]; then
+        sleep "${var.guest_agent_ip_initial_delay_seconds}"
+      fi
+
+      ticket_response=$(curl -sf -k -X POST \
+        --data-urlencode "username=${var.proxmox_api_username}" \
+        --data-urlencode "password=${var.proxmox_api_password}" \
+        "${var.proxmox_url}/api2/json/access/ticket")
+
+      ticket=$(printf '%s' "$${ticket_response}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["data"]["ticket"])')
+
+      deadline=$((SECONDS + ${var.guest_agent_ip_max_wait_seconds}))
+      while [ "$SECONDS" -lt "$deadline" ]; do
+        agent_response=$(curl -sf -k \
+          -b "PVEAuthCookie=$${ticket}" \
+          "${var.proxmox_url}/api2/json/nodes/${var.proxmox_node}/qemu/${var.vm_config.vm_id}/agent/network-get-interfaces" || true)
+
+        primary_ip=$(printf '%s' "$${agent_response}" | python3 -c '
+import ipaddress
+import json
+import sys
+
+try:
+    payload = json.load(sys.stdin)
+except json.JSONDecodeError:
+    sys.exit(0)
+
+interfaces = payload.get("data", {}).get("result", [])
+for interface in interfaces:
+    for address in interface.get("ip-addresses", []):
+        if address.get("ip-address-type") != "ipv4":
+            continue
+        value = address.get("ip-address")
+        if not value:
+            continue
+        ip = ipaddress.ip_address(value)
+        if ip.is_loopback or ip.is_link_local or ip.is_unspecified:
+            continue
+        print(value)
+        sys.exit(0)
+')
+
+        if [ -n "$${primary_ip}" ]; then
+          printf '{"primary_ip":"%s"}\n' "$${primary_ip}" > "${local.primary_ip_file}"
+          exit 0
+        fi
+
+        sleep 10
+      done
+
+      echo "ERROR: timed out waiting for a non-loopback IPv4 address from QEMU guest agent for VM ${var.vm_config.vm_id}" >&2
+      exit 1
+    EOT
+  }
+
+  depends_on = [proxmox_virtual_environment_vm.vm]
+}
+
+data "local_file" "primary_ip" {
+  count = local.network_interfaces[0].effective_ip_mode == "dhcp" ? 1 : 0
+
+  filename   = local.primary_ip_file
+  depends_on = [null_resource.wait_for_primary_ip]
 }
 
 # Detach cloud-init drive after first boot — cloud-init has already run by this point.
