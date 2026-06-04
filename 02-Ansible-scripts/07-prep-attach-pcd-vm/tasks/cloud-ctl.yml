@@ -1,0 +1,16 @@
+---
+- name: Download pcdctl setup script
+  become: true
+  ansible.builtin.get_url:
+    url: "{{ pcdctl_setup_url | default('https://pcdctl.s3.us-west-2.amazonaws.com/pcdctl-setup') }}"
+    dest: "{{ pcdctl_setup_path | default('/tmp/pcdctl-setup') }}"
+    owner: root
+    group: root
+    mode: '0755'
+    force: true
+
+- name: Execute pcdctl-setup script
+  become: true
+  ansible.builtin.command:
+    cmd: "{{ pcdctl_setup_path | default('/tmp/pcdctl-setup') }}"
+  changed_when: true

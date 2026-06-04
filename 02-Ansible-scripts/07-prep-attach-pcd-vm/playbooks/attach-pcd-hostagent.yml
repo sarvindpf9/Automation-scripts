@@ -1,0 +1,12 @@
+---
+- name: Install pcdctl and attach guest VMs to PCD
+  hosts: "{{ pcd_attach_hosts | default('proxmox_vms') }}"
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Install pcdctl
+      ansible.builtin.import_tasks: ../tasks/cloud-ctl.yml
+
+    - name: Configure PCD hostagent
+      ansible.builtin.import_tasks: ../tasks/hostagent.yml

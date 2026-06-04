@@ -1,5 +1,5 @@
 ---
-- name: Create CE VMs on Proxmox from template
+- name: Create Proxmox VMs from template
   hosts: proxmox_nodes
   gather_facts: false
   become: true
@@ -14,5 +14,6 @@
     - name: Clone and configure VMs
       ansible.builtin.import_tasks: ../tasks/clone-vms.yml
 
-    - name: Discover DHCP VM IPs and patch in-memory inventory
-      ansible.builtin.import_tasks: ../tasks/discover-vm-ips.yml
+    - name: Generate guest inventory
+      ansible.builtin.import_tasks: ../tasks/generate-guest-inventory.yml
+      when: generated_guest_inventory_enabled | bool

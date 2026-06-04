@@ -1,0 +1,135 @@
+---
+- name: Validate /etc/hosts entries
+  ansible.builtin.assert:
+    that:
+      - pcd_storage_host_entries is defined
+      - pcd_storage_host_entries | length > 0
+    fail_msg: "Set pcd_storage_host_entries as a list of {ip, names} values before running this play."
+
+- name: Validate /etc/hosts entry values
+  ansible.builtin.assert:
+    that:
+      - item.ip is defined
+      - item.ip | length > 0
+      - item.ip is not match('^<.*>$')
+      - item.names is defined
+      - item.names | length > 0
+      - item.names | reject('match', '^<.*>$') | list | length == item.names | length
+    fail_msg: "Each pcd_storage_host_entries item must include ip and names values."
+  loop: "{{ pcd_storage_host_entries }}"
+
+- name: Add PCD host entries to /etc/hosts
+  become: true
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} ANSIBLE MANAGED PCD HOST ENTRIES"
+    block: |
+      {% for entry in pcd_storage_host_entries %}
+      {{ entry.ip }} {{ entry.names | join(' ') }}
+      {% endfor %}
+    state: present
+    backup: true
+
+- name: Create PCD storage mount directories
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /var/opt/imagelibrary/data
+    - /opt/data/instances
+
+- name: Define PCD NFS mount entries
+  ansible.builtin.set_fact:
+    pcd_storage_nfs_mounts:
+      - src: 10.96.7.20:/mnt/nfsshare/glance
+        path: /var/opt/imagelibrary/data
+      - src: 10.96.7.20:/mnt/nfsshare/ephemeral
+        path: /opt/data/instances
+
+- name: Read current fstab content
+  become: true
+  ansible.builtin.slurp:
+    path: /etc/fstab
+  register: pcd_storage_fstab_current
+
+- name: Check current PCD NFS mountpoints
+  become: true
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - --mountpoint
+      - "{{ item.path }}"
+  register: pcd_storage_findmnt_results
+  changed_when: false
+  failed_when: false
+  loop: "{{ pcd_storage_nfs_mounts }}"
+
+- name: Configure PCD NFS fstab entries
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: "^{{ item.src | regex_escape }}\\s+{{ item.path | regex_escape }}\\s+"
+    line: "{{ item.src }}      {{ item.path }}      nfs   vers=4,proto=tcp   0       0"
+    state: present
+    backup: true
+  register: pcd_storage_fstab_entries
+  loop: "{{ pcd_storage_nfs_mounts }}"
+  loop_control:
+    index_var: pcd_storage_mount_index
+  vars:
+    pcd_storage_fstab_text: "{{ pcd_storage_fstab_current.content | b64decode }}"
+    pcd_storage_fstab_match: "{{ item.src | regex_escape }}\\s+{{ item.path | regex_escape }}\\s+"
+  when:
+    - pcd_storage_fstab_text is not search(pcd_storage_fstab_match)
+    - pcd_storage_findmnt_results.results[pcd_storage_mount_index].rc != 0
+
+- name: Reload systemd after fstab update
+  become: true
+  ansible.builtin.command:
+    cmd: systemctl daemon-reload
+  changed_when: false
+  when: pcd_storage_fstab_entries.changed
+
+- name: Mount configured fstab entries
+  become: true
+  ansible.builtin.command:
+    cmd: mount -a
+  changed_when: false
+  when: pcd_storage_fstab_entries.changed
+
+- name: Check pf9 user exists before setting ownership
+  become: true
+  ansible.builtin.getent:
+    database: passwd
+    key: pf9
+  register: pcd_storage_pf9_user
+  failed_when: false
+
+- name: Check pf9group group exists before setting ownership
+  become: true
+  ansible.builtin.getent:
+    database: group
+    key: pf9group
+  register: pcd_storage_pf9_group
+  failed_when: false
+
+- name: Report missing pf9 ownership prerequisites
+  ansible.builtin.debug:
+    msg: "pf9 user or pf9group group is not present; recursive chown will still be attempted and ignored if the OS cannot resolve the account."
+  when: pcd_storage_pf9_user.failed or pcd_storage_pf9_group.failed
+
+- name: Ensure PCD storage directory ownership is recursive
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: pf9
+    group: pf9group
+    recurse: true
+  loop:
+    - /var/opt/imagelibrary/
+    - /opt/data/instances
+  register: pcd_storage_ownership_result
+  failed_when: false

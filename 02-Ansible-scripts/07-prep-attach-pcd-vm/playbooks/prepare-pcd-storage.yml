@@ -1,0 +1,9 @@
+---
+- name: Prepare PCD guest storage and host mappings
+  hosts: "{{ pcd_storage_hosts | default('proxmox_vms') }}"
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Configure hosts entries and PCD storage mounts
+      ansible.builtin.import_tasks: ../tasks/prepare-pcd-storage.yml

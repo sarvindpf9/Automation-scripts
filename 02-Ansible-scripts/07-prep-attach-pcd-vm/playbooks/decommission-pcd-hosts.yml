@@ -1,0 +1,9 @@
+---
+- name: Decommission PCD hosts and remove packages
+  hosts: "{{ pcd_attach_hosts | default('proxmox_vms') }}"
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Run host decommissioning operation
+      ansible.builtin.import_tasks: ../tasks/decomm-hosts.yml

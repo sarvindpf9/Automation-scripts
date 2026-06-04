@@ -1,11 +1,11 @@
-# 06-proxmox-VM-create
+# 07-prep-attach-pcd-vm
 
 Ansible playbooks to clone Proxmox VMs from an existing template, render cloud-init user/network snippets, and configure VM networking and start behavior. This directory is intended for controller-driven deployment with inventory and group variables managed in `inventory.yaml` and `group_vars/all.yml`.
 
 ## Files
 
 ```text
-06-proxmox-VM-create/
+07-prep-attach-pcd-vm/
 ├── ansible.cfg
 ├── inventory.yaml
 ├── requirements.txt
@@ -17,15 +17,23 @@ Ansible playbooks to clone Proxmox VMs from an existing template, render cloud-i
 │   └── launch-single-nic.yml
 ├── group_vars/all.yml
 ├── playbooks/
+│   ├── attach-pcd-hostagent.yml  # install pcdctl and attach guest VMs to PCD
 │   ├── create-vms.yml
+│   ├── decommission-pcd-hosts.yml # decommission PCD hosts and unmount PCD storage
 │   ├── delete-vms.yml
-│   └── dhcp-to-static.yml        # convert a DHCP interface to a static netplan entry
+│   ├── dhcp-to-static.yml        # convert a DHCP interface to a static netplan entry
+│   └── prepare-pcd-storage.yml   # add hosts entries and configure PCD NFS paths
 ├── tasks/
+│   ├── cloud-ctl.yml              # download and execute pcdctl setup
 │   ├── clone-vms.yml
 │   ├── delete-preflight.yml
 │   ├── delete-vms.yml
+│   ├── decomm-hosts.yml           # decommission guard, storage cleanup, pcdctl decommission
+│   ├── decomm-precheck.yml
 │   ├── dhcp-to-static.yml         # task file used by playbooks/dhcp-to-static.yml
 │   ├── generate-guest-inventory.yml
+│   ├── hostagent.yml              # configure pcdctl and run pcdctl prep-node
+│   ├── prepare-pcd-storage.yml    # /etc/hosts, directories, ownership, fstab
 │   ├── preflight.yml
 │   └── render-snippets.yml
 └── templates/
@@ -52,7 +60,7 @@ Ansible playbooks to clone Proxmox VMs from an existing template, render cloud-i
 Create a local Python virtual environment in this template directory and install all Python dependencies inside it. Keep the venv activated whenever you run `ansible-playbook`, `ansible-galaxy`, or `ansible-lint` for this template.
 
 ```bash
-cd 02-Ansible-scripts/06-proxmox-VM-create
+cd 02-Ansible-scripts/07-prep-attach-pcd-vm
 
 # Create and activate an isolated local environment.
 python3 -m venv .venv
@@ -79,7 +87,7 @@ ansible-playbook --syntax-check playbooks/create-vms.yml
 If you open a new shell, reactivate the venv before running the playbooks:
 
 ```bash
-cd 02-Ansible-scripts/06-proxmox-VM-create
+cd 02-Ansible-scripts/07-prep-attach-pcd-vm
 source .venv/bin/activate
 ```
 
@@ -156,6 +164,76 @@ Edit `inventory.yaml` to set `ansible_host` and `ansible_user` for the Proxmox n
 
 ## Usage
 
+### Workflow commands
+
+Run these from `02-Ansible-scripts/07-prep-attach-pcd-vm` with the virtual environment activated. Replace placeholders with site-specific values or move them into override YAML files.
+
+1. Create Proxmox VM(s) and generate guest inventory:
+
+```bash
+ansible-playbook playbooks/create-vms.yml \
+  -e @<VM_OVERRIDES_YAML>
+```
+
+2. Prepare PCD guest storage, `/etc/hosts`, `/etc/fstab`, and NFS mounts:
+
+```bash
+ansible-playbook \
+  -i generated/vm-inventory.yml \
+  playbooks/prepare-pcd-storage.yml \
+  -e @<PCD_STORAGE_OVERRIDES_YAML>
+```
+
+Example storage override:
+
+```yaml
+# pcd-storage-override.yml
+pcd_storage_host_entries:
+  - ip: <IP_ADDRESS>
+    names:
+      - <FQDN>
+      - <HOST_ALIAS>
+```
+
+3. Install `pcdctl` and attach the guest VM(s) to PCD:
+
+```bash
+ansible-playbook \
+  -i generated/vm-inventory.yml \
+  playbooks/attach-pcd-hostagent.yml \
+  -e pcd_region_portal=<PCD_REGION_PORTAL_URL> \
+  -e cloud_username=<PCD_USERNAME> \
+  -e cloud_password=<PCD_PASSWORD> \
+  -e cloud_project_name=<PCD_PROJECT_NAME> \
+  -e cloud_region_name=<PCD_REGION_NAME>
+```
+
+4. Decommission PCD host(s), comment PCD storage fstab entries, unmount PCD storage, and run `pcdctl decommission-node`:
+
+> **Decommissioning assumption:** before running this play, the host is expected to have its PCD roles already removed and to appear in an unauthorized state in the PCD UI. This play does not extensively check whether the host still has current roles, VMs, volumes, or other cloud resources mapped to it.
+
+```bash
+ansible-playbook \
+  -i generated/vm-inventory.yml \
+  playbooks/decommission-pcd-hosts.yml
+```
+
+5. Delete the Proxmox VM(s) defined in `vms`:
+
+```bash
+ansible-playbook playbooks/delete-vms.yml \
+  -e @<VM_OVERRIDES_YAML>
+```
+
+Optional DHCP-to-static conversion for guest VM(s):
+
+```bash
+ansible-playbook \
+  -i generated/vm-inventory.yml \
+  playbooks/dhcp-to-static.yml \
+  -e target_interface=<INTERFACE_NAME>
+```
+
 ```bash
 ansible-playbook playbooks/create-vms.yml
 ```
@@ -165,6 +243,70 @@ Delete the VMs defined in the same `vms` map:
 ```bash
 ansible-playbook playbooks/delete-vms.yml
 ```
+
+Install `pcdctl` and attach generated guest VMs to PCD:
+
+```bash
+ansible-playbook \
+  -i generated/vm-inventory.yml \
+  playbooks/attach-pcd-hostagent.yml \
+  -e pcd_region_portal=<PCD_REGION_PORTAL_URL> \
+  -e cloud_username=<PCD_USERNAME> \
+  -e cloud_password=<PCD_PASSWORD> \
+  -e cloud_project_name=<PCD_PROJECT_NAME> \
+  -e cloud_region_name=<PCD_REGION_NAME>
+```
+
+Prepare guest storage paths, ownership, `/etc/fstab`, and required `/etc/hosts` entries:
+
+```bash
+ansible-playbook \
+  -i generated/vm-inventory.yml \
+  playbooks/prepare-pcd-storage.yml \
+  -e '{"pcd_storage_host_entries": [{"ip": "<IP_ADDRESS>", "names": ["<FQDN>", "<HOST_ALIAS>"]}]}'
+```
+
+Use an override YAML file when you need to keep `/etc/hosts` input readable or reusable:
+
+```yaml
+# pcd-storage-override.yml
+pcd_storage_host_entries:
+  - ip: <IP_ADDRESS>
+    names:
+      - <FQDN>
+      - <HOST_ALIAS>
+```
+
+```bash
+ansible-playbook \
+  -i generated/vm-inventory.yml \
+  playbooks/prepare-pcd-storage.yml \
+  -e @pcd-storage-override.yml
+```
+
+Multiple `/etc/hosts` entries can be supplied in the same override file:
+
+```yaml
+# pcd-storage-override.yml
+pcd_storage_host_entries:
+  - ip: <IP_ADDRESS_1>
+    names:
+      - <FQDN_1>
+      - <HOST_ALIAS_1>
+  - ip: <IP_ADDRESS_2>
+    names:
+      - <FQDN_2>
+      - <HOST_ALIAS_2>
+```
+
+The `/etc/fstab` entries are fixed in `tasks/prepare-pcd-storage.yml` and are applied by the same play:
+
+```text
+10.96.7.20:/mnt/nfsshare/glance      /var/opt/imagelibrary/data      nfs   vers=4,proto=tcp   0       0
+10.96.7.20:/mnt/nfsshare/ephemeral   /opt/data/instances             nfs   vers=4,proto=tcp   0       0
+```
+
+Before writing `/etc/fstab`, the play checks for an existing matching fstab line and whether each mountpoint is already mounted; entries that already satisfy either condition are skipped. After updating `/etc/fstab`, the play runs `systemctl daemon-reload` when the file changed, then runs `mount -a`. Recursive ownership is still attempted when `pf9` or `pf9group` is absent, but the play continues if the OS cannot resolve the account or group yet.
 
 Override any variable with `-e`:
 

@@ -1,0 +1,59 @@
+---
+- name: Resolve generated guest inventory path
+  ansible.builtin.set_fact:
+    generated_guest_inventory_resolved_path: >-
+      {{
+        generated_guest_inventory_path
+        if generated_guest_inventory_path is match('^/')
+        else playbook_dir + '/../' + generated_guest_inventory_path
+      }}
+    generated_guest_inventory_private_key_path: >-
+      {{
+        (
+          generated_guest_inventory_ssh_private_key_path
+          | default(ssh_public_key_path | regex_replace('\\.pub$', ''), true)
+        )
+        | regex_replace('\\.pub$', '')
+      }}
+
+- name: Build guest inventory from static config and DHCP guest-agent data
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ playbook_dir }}/../scripts/build-dhcp-inventory.py"
+      - --api-host
+      - "{{ proxmox_api_host }}"
+      - --api-port
+      - "{{ proxmox_api_port | string }}"
+      - --api-user
+      - "{{ proxmox_api_user }}"
+      - --validate-certs
+      - "{{ (proxmox_validate_certs | bool) | ternary('true', 'false') }}"
+      - --node
+      - "{{ proxmox_node }}"
+      - --output
+      - "{{ generated_guest_inventory_resolved_path }}"
+      - --ssh-user
+      - "{{ generated_guest_inventory_user }}"
+      - --ssh-private-key
+      - "{{ generated_guest_inventory_private_key_path }}"
+      - --initial-delay
+      - "{{ guest_agent_inventory_initial_delay_seconds | string }}"
+      - --max-wait
+      - "{{ guest_agent_inventory_max_wait_seconds | string }}"
+      - --poll-interval
+      - "{{ guest_agent_inventory_poll_interval_seconds | string }}"
+      - --qemu-agent-enabled
+      - "{{ (qemu_agent_enabled | bool) | ternary('true', 'false') }}"
+    stdin: "{{ {'vms': vms} | to_json }}"
+  environment:
+    PROXMOX_API_PASSWORD: "{{ proxmox_api_password }}"
+  register: generated_guest_inventory_result
+  delegate_to: localhost
+  become: false
+  changed_when: true
+  no_log: true
+
+- name: Show generated guest inventory path
+  ansible.builtin.debug:
+    msg: "Generated guest inventory: {{ generated_guest_inventory_resolved_path }}"

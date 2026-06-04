@@ -1,0 +1,92 @@
+---
+- name: Define PCD decommission mountpoints
+  ansible.builtin.set_fact:
+    pcd_decommission_mountpoints:
+      - /var/opt/imagelibrary
+      - /var/opt/imagelibrary/data
+      - /opt/data/instances
+
+- name: Check whether virsh is available
+  ansible.builtin.command:
+    argv:
+      - virsh
+      - --version
+  register: pcd_decommission_virsh_available
+  changed_when: false
+  failed_when: false
+
+- name: Skip running VM check when libvirt tools are absent
+  ansible.builtin.debug:
+    msg: "virsh/libvirt tools are not present on this host; skipping running libvirt VM check."
+  when: pcd_decommission_virsh_available.rc != 0
+
+- name: Check for running libvirt VMs
+  become: true
+  ansible.builtin.command:
+    argv:
+      - virsh
+      - list
+      - --name
+  register: pcd_decommission_virsh_running
+  changed_when: false
+  when: pcd_decommission_virsh_available.rc == 0
+
+- name: Stop decommission when libvirt VMs are running
+  ansible.builtin.assert:
+    that:
+      - pcd_decommission_virsh_running.stdout_lines | reject('equalto', '') | list | length == 0
+    fail_msg: >-
+      Running libvirt VMs were found on this host:
+      {{ pcd_decommission_virsh_running.stdout_lines | reject('equalto', '') | list | join(', ') }}.
+      Stop or migrate them before running PCD decommission.
+  when: pcd_decommission_virsh_available.rc == 0
+
+- name: Comment PCD storage fstab entries
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: "^([^#]\\S+\\s+{{ item | regex_escape }}/?\\s+\\S+.*)$"
+    line: "# \\1"
+    backrefs: true
+    backup: true
+  register: pcd_decommission_fstab_comments
+  loop: "{{ pcd_decommission_mountpoints }}"
+
+- name: Reload systemd after commenting fstab entries
+  become: true
+  ansible.builtin.command:
+    cmd: systemctl daemon-reload
+  changed_when: false
+  when: pcd_decommission_fstab_comments.changed
+
+- name: Check current PCD storage mountpoints
+  become: true
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - --mountpoint
+      - "{{ item }}"
+  register: pcd_decommission_findmnt_results
+  changed_when: false
+  failed_when: false
+  loop: "{{ pcd_decommission_mountpoints }}"
+
+- name: Unmount PCD storage mountpoints when mounted
+  become: true
+  ansible.builtin.command:
+    argv:
+      - umount
+      - "{{ item.item }}"
+  changed_when: true
+  loop: "{{ pcd_decommission_findmnt_results.results }}"
+  when: item.rc == 0
+
+- name: Decommission PCD node
+  become: true
+  ansible.builtin.command:
+    argv:
+      - pcdctl
+      - decommission-node
+      - --no-prompt
+      - --verbose
+  changed_when: true

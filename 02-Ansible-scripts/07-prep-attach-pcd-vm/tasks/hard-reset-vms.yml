@@ -1,0 +1,41 @@
+---
+- name: Hard stop VMs (force power-off regardless of current state)
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_password: "{{ proxmox_api_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    api_timeout: "{{ proxmox_api_timeout }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ item.value.vm_id }}"
+    name: "{{ item.value.vm_name }}"
+    state: stopped
+    force: true
+    timeout: "{{ proxmox_api_timeout }}"
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ item.value.vm_name }}"
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Start VMs
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_password: "{{ proxmox_api_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    api_timeout: "{{ proxmox_api_timeout }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ item.value.vm_id }}"
+    name: "{{ item.value.vm_name }}"
+    state: started
+    timeout: "{{ proxmox_api_timeout }}"
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ item.value.vm_name }}"
+  delegate_to: localhost
+  become: false
+  no_log: true

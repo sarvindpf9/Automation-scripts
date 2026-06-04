@@ -1,0 +1,54 @@
+---
+# Sends a force-stop signal before deletion. ignore_errors covers VMs that are
+# already stopped or do not exist. The subsequent delete task handles removal
+# regardless of whether this step changes anything.
+- name: Force stop VMs before deletion
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_password: "{{ proxmox_api_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ item.value.vm_id }}"
+    state: stopped
+    force: true
+    timeout: 60
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ item.value.vm_name }}"
+  when: delete_force | bool
+  ignore_errors: true
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Delete VMs
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_password: "{{ proxmox_api_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ item.value.vm_id }}"
+    name: "{{ item.value.vm_name }}"
+    state: absent
+    force: "{{ delete_force | bool }}"
+    purge: "{{ delete_purge | bool }}"
+    timeout: "{{ proxmox_api_timeout }}"
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ item.value.vm_name }}"
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Remove cloud-init snippet files
+  ansible.builtin.file:
+    path: "{{ snippet_directory }}/{{ item.0.value.vm_name | regex_replace('[^a-zA-Z0-9-]', '-') }}-{{ item.1 }}.yaml"
+    state: absent
+  loop: "{{ (vms | dict2items) | product(['user-data', 'network-data']) | list }}"
+  loop_control:
+    label: "{{ item.0.value.vm_name }} {{ item.1 }}"
+  when: delete_remove_snippets | bool

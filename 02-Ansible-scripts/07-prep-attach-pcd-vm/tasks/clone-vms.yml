@@ -22,7 +22,6 @@
     api_user: "{{ proxmox_api_user }}"
     api_password: "{{ proxmox_api_password }}"
     validate_certs: "{{ proxmox_validate_certs }}"
-    api_timeout: "{{ proxmox_api_timeout }}"
     node: "{{ proxmox_node }}"
     clone: "{{ template_vm_name }}"
     vmid: "{{ template_vm_id }}"
@@ -47,7 +46,7 @@
     api_user: "{{ proxmox_api_user }}"
     api_password: "{{ proxmox_api_password }}"
     validate_certs: "{{ proxmox_validate_certs }}"
-    api_timeout: "{{ proxmox_api_timeout }}"
+    timeout: "{{ proxmox_api_timeout }}"
     node: "{{ proxmox_node }}"
     vmid: "{{ item.value.vm_id }}"
     name: "{{ item.value.vm_name }}"
@@ -58,7 +57,7 @@
     balloon: 0
     scsihw: "{{ scsi_controller }}"
     boot: "{{ boot_order }}"
-    agent: "{{ 1 if qemu_agent_enabled else 0 }}"
+    agent: "enabled={{ 1 if qemu_agent_enabled | bool else 0 }},fstrim_cloned_disks={{ 1 if qemu_agent_fstrim_cloned_disks | bool else 0 }},freeze-fs-on-backup={{ 1 if qemu_agent_freeze_fs_on_backup | bool else 0 }}"
     net: "{{ lookup('ansible.builtin.template', '../templates/proxmox-net.yml.j2') | from_yaml }}"
     ide: "{{ {'ide2': cloudinit_drive_datastore_id + ':cloudinit,format=' + disk_format} if item.value.vm_id not in existing_vmids else omit }}"
     cicustom: "user={{ snippet_datastore_id }}:snippets/{{ item.value.vm_name | regex_replace('[^a-zA-Z0-9-]', '-') }}-user-data.yaml,network={{ snippet_datastore_id }}:snippets/{{ item.value.vm_name | regex_replace('[^a-zA-Z0-9-]', '-') }}-network-data.yaml"
@@ -72,7 +71,7 @@
   become: false
   no_log: true
 
-# Resize the cloned disk to the target size.  Specifying scsi0 in the apply
+# Resize the cloned disk to the target size. Specifying scsi0 in the apply
 # task above would allocate a second blank disk on the same slot, orphaning
 # the cloned disk and causing the VM to boot from an empty drive.
 - name: Resize root disk to target size
@@ -100,7 +99,7 @@
     api_user: "{{ proxmox_api_user }}"
     api_password: "{{ proxmox_api_password }}"
     validate_certs: "{{ proxmox_validate_certs }}"
-    api_timeout: "{{ proxmox_api_timeout }}"
+    timeout: "{{ proxmox_api_timeout }}"
     node: "{{ proxmox_node }}"
     vmid: "{{ item.value.vm_id }}"
     name: "{{ item.value.vm_name }}"
@@ -120,7 +119,7 @@
     api_user: "{{ proxmox_api_user }}"
     api_password: "{{ proxmox_api_password }}"
     validate_certs: "{{ proxmox_validate_certs }}"
-    api_timeout: "{{ proxmox_api_timeout }}"
+    timeout: "{{ proxmox_api_timeout }}"
     node: "{{ proxmox_node }}"
     vmid: "{{ item.value.vm_id }}"
     name: "{{ item.value.vm_name }}"

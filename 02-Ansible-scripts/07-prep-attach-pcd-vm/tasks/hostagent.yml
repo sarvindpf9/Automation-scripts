@@ -1,0 +1,64 @@
+---
+- name: Check for existing host_id
+  become: true
+  ansible.builtin.stat:
+    path: /etc/pf9/host_id.conf
+  register: host_id_conf
+
+- name: Validate PCD attach variables
+  ansible.builtin.assert:
+    that:
+      - pcd_region_portal is defined
+      - pcd_region_portal | length > 0
+      - pcd_region_portal is not match('^<.*>$')
+      - cloud_username is defined
+      - cloud_username | length > 0
+      - cloud_username is not match('^<.*>$')
+      - cloud_password is defined
+      - cloud_password | length > 0
+      - cloud_password is not match('^<.*>$')
+      - cloud_project_name is defined
+      - cloud_project_name | length > 0
+      - cloud_project_name is not match('^<.*>$')
+      - cloud_region_name is defined
+      - cloud_region_name | length > 0
+      - cloud_region_name is not match('^<.*>$')
+    fail_msg: "Set pcd_region_portal, cloud_username, cloud_password, cloud_project_name, and cloud_region_name before attaching hosts."
+  no_log: true
+  when: not host_id_conf.stat.exists
+
+- name: Configure and prepare PCD hostagent
+  when: not host_id_conf.stat.exists
+  block:
+    - name: Set pcdctl Config
+      become: true
+      ansible.builtin.command:
+        argv:
+          - pcdctl
+          - config
+          - set
+          - -u
+          - "{{ pcd_region_portal }}"
+          - -e
+          - "{{ cloud_username }}"
+          - -p
+          - "{{ cloud_password }}"
+          - -t
+          - "{{ cloud_project_name }}"
+          - -r
+          - "{{ cloud_region_name }}"
+          - --no-prompt
+          - --verbose
+      no_log: true
+      changed_when: true
+
+    - name: Prep Node
+      become: true
+      ansible.builtin.command:
+        argv:
+          - pcdctl
+          - prep-node
+          - --skip-checks
+          - --no-prompt
+          - --verbose
+      changed_when: true

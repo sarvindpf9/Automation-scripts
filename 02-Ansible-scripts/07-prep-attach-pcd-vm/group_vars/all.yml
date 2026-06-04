@@ -100,3 +100,25 @@ guest_agent_inventory_poll_interval_seconds: 10
 delete_force: true
 delete_purge: true
 delete_remove_snippets: true
+
+# PCD host attach settings used by playbooks/attach-pcd-hostagent.yml.
+# Override pcd_attach_hosts to a concrete inventory group or host pattern.
+pcd_attach_hosts: proxmox_vms
+pcdctl_setup_url: https://pcdctl.s3.us-west-2.amazonaws.com/pcdctl-setup
+pcdctl_setup_path: /tmp/pcdctl-setup
+pcd_region_portal: <PCD_REGION_PORTAL_URL>
+cloud_username: <PCD_USERNAME>
+cloud_password: <PCD_PASSWORD>
+cloud_project_name: <PCD_PROJECT_NAME>
+cloud_region_name: <PCD_REGION_NAME>
+
+# PCD guest storage preparation used by playbooks/prepare-pcd-storage.yml.
+# Set pcd_storage_hosts to the inventory group or host pattern to configure.
+pcd_storage_hosts: proxmox_vms
+pcd_storage_host_entries: []
+# Example:
+# pcd_storage_host_entries:
+#   - ip: <IP_ADDRESS>
+#     names:
+#       - <FQDN>
+#       - <HOST_ALIAS>

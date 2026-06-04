@@ -1,0 +1,9 @@
+---
+- name: Hard reset Proxmox VMs (force stop then start)
+  hosts: proxmox_nodes
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Hard reset VMs
+      ansible.builtin.import_tasks: ../tasks/hard-reset-vms.yml

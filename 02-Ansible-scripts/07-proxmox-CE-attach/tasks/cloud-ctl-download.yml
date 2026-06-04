@@ -1,8 +1,0 @@
----
-- name: Download latest cloud-ctl binary
-  ansible.builtin.get_url:
-    url: "{{ cloud_ctl_url }}"
-    dest: /usr/bin/cloud-ctl
-    mode: "0755"
-    force: true
-  become: true
