@@ -5,29 +5,71 @@
 # Run with:
 #   ansible-playbook playbooks/create-vms.yml -e @examples/launch-multi-nic.yml
 
-ssh_public_key_path: ~/.ssh/id_rsa.pub
-cloud_init_user: ubuntu
+---
+proxmox_api_host: 10.96.14.185
+proxmox_api_port: 8006
+proxmox_api_user: "root@pam"
+proxmox_api_password: "Killzone@123"
+proxmox_validate_certs: false
+proxmox_api_timeout: 300
 
+proxmox_node: sa-03
+template_vm_id: 600
+template_vm_name: ubuntu-24-04-tmpl
+datastore_id: data-sa-03
+cloudinit_drive_datastore_id: data-sa-03
+snippet_datastore_id: local
+snippet_directory: /var/lib/vz/snippets
+
+generated_guest_inventory_enabled: true
+ssh_public_key_path: ~/.ssh/id_ed25519.pub
+cloud_init_user: ubuntu
+cloud_init_user_password: "password"
+
+nameservers:
+  - 10.96.0.1
+
+vm_name_prefix: jp1
+
+# PCD host enrolment vars
+pcd_region_portal: "https://pf9-salocal.ce.janp1"
+cloud_username: "pf9user@platform9.com"
+cloud_password: "Platform9!"
+cloud_project_name: "service"
+cloud_region_name: "salocal"
+
+
+pcd_storage_host_entries:
+  - ip: 10.96.14.164
+    names:
+      - pf9-salocal.ce.janp1
+      - salocal
+  - ip: 10.96.14.164
+    names:
+      - pf9.ce.janp1
+      - janp1
 vms:
-  multi_nic_vm:
-    vm_name: <MULTI_NIC_VM_NAME>
-    vm_id: <MULTI_NIC_VM_ID>
-    memory_mb: 8192
+  ubuntu24-lab-test1:
+    vm_name: Arvind-PCD-test1
+    vm_id: 1010
+    memory_mb: 8096
     cores: 4
     sockets: 1
-    disk_size_gb: 100
+    disk_size_gb: 130
     network_interfaces:
-      - bridge: <PROXMOX_MANAGEMENT_BRIDGE>
-        vlan_id: <MANAGEMENT_VLAN_ID>
-        ip: <MANAGEMENT_CIDR_IP>
-        gw: <MANAGEMENT_GATEWAY_IP>
-        dns:
-          - <DNS_SERVER>
-        vlan_devices: []
-      - bridge: <PROXMOX_TRUNK_BRIDGE>
-        vlan_devices:
-          - id: <TENANT_VLAN_ID>
-            ip: <TENANT_CIDR_IP>
-          - id: <STORAGE_VLAN_ID>
-            ip: <STORAGE_CIDR_IP>
+      - bridge: vmbr0
+        dhcp4: true
+# VM behavior options.
+start_vms: true
+detach_cloudinit_drive: true
+clone_full: true
+disk_format: raw
+cpu_type: host
+scsi_controller: virtio-scsi-single
+boot_order: order=scsi0
+qemu_agent_enabled: true
 
+# Delete behavior used by playbooks/delete-vms.yml.
+delete_force: true
+delete_purge: true
+delete_remove_snippets: true

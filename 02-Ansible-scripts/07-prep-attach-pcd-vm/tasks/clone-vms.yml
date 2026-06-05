@@ -26,14 +26,16 @@
     clone: "{{ template_vm_name }}"
     vmid: "{{ template_vm_id }}"
     newid: "{{ item.value.vm_id }}"
-    name: "{{ item.value.vm_name }}"
+    name: "{{ effective_vm_name }}"
     storage: "{{ datastore_id }}"
     full: "{{ clone_full }}"
     format: "{{ disk_format }}"
     timeout: "{{ proxmox_api_timeout }}"
   loop: "{{ vms | dict2items }}"
   loop_control:
-    label: "{{ item.value.vm_name }}"
+    label: "{{ effective_vm_name }}"
+  vars:
+    effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
   when: item.value.vm_id not in existing_vmids
   delegate_to: localhost
   become: false
@@ -49,7 +51,7 @@
     timeout: "{{ proxmox_api_timeout }}"
     node: "{{ proxmox_node }}"
     vmid: "{{ item.value.vm_id }}"
-    name: "{{ item.value.vm_name }}"
+    name: "{{ effective_vm_name }}"
     cores: "{{ item.value.cores }}"
     sockets: "{{ item.value.sockets }}"
     cpu: "{{ cpu_type }}"
@@ -60,13 +62,15 @@
     agent: "enabled={{ 1 if qemu_agent_enabled | bool else 0 }},fstrim_cloned_disks={{ 1 if qemu_agent_fstrim_cloned_disks | bool else 0 }},freeze-fs-on-backup={{ 1 if qemu_agent_freeze_fs_on_backup | bool else 0 }}"
     net: "{{ lookup('ansible.builtin.template', '../templates/proxmox-net.yml.j2') | from_yaml }}"
     ide: "{{ {'ide2': cloudinit_drive_datastore_id + ':cloudinit,format=' + disk_format} if item.value.vm_id not in existing_vmids else omit }}"
-    cicustom: "user={{ snippet_datastore_id }}:snippets/{{ item.value.vm_name | regex_replace('[^a-zA-Z0-9-]', '-') }}-user-data.yaml,network={{ snippet_datastore_id }}:snippets/{{ item.value.vm_name | regex_replace('[^a-zA-Z0-9-]', '-') }}-network-data.yaml"
+    cicustom: "user={{ snippet_datastore_id }}:snippets/{{ effective_vm_name | regex_replace('[^a-zA-Z0-9-]', '-') }}-user-data.yaml,network={{ snippet_datastore_id }}:snippets/{{ effective_vm_name | regex_replace('[^a-zA-Z0-9-]', '-') }}-network-data.yaml"
     update: true
     update_unsafe: true
     state: present
   loop: "{{ vms | dict2items }}"
   loop_control:
-    label: "{{ item.value.vm_name }}"
+    label: "{{ effective_vm_name }}"
+  vars:
+    effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
   delegate_to: localhost
   become: false
   no_log: true
@@ -87,7 +91,9 @@
     state: resized
   loop: "{{ vms | dict2items }}"
   loop_control:
-    label: "{{ item.value.vm_name }}"
+    label: "{{ effective_vm_name }}"
+  vars:
+    effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
   delegate_to: localhost
   become: false
   no_log: true
@@ -102,11 +108,13 @@
     timeout: "{{ proxmox_api_timeout }}"
     node: "{{ proxmox_node }}"
     vmid: "{{ item.value.vm_id }}"
-    name: "{{ item.value.vm_name }}"
+    name: "{{ effective_vm_name }}"
     state: started
   loop: "{{ vms | dict2items }}"
   loop_control:
-    label: "{{ item.value.vm_name }}"
+    label: "{{ effective_vm_name }}"
+  vars:
+    effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
   when: start_vms | bool
   delegate_to: localhost
   become: false
@@ -122,11 +130,13 @@
     timeout: "{{ proxmox_api_timeout }}"
     node: "{{ proxmox_node }}"
     vmid: "{{ item.value.vm_id }}"
-    name: "{{ item.value.vm_name }}"
+    name: "{{ effective_vm_name }}"
     delete: ide2
   loop: "{{ vms | dict2items }}"
   loop_control:
-    label: "{{ item.value.vm_name }}"
+    label: "{{ effective_vm_name }}"
+  vars:
+    effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
   when: (detach_cloudinit_drive | bool) and (item.value.vm_id not in existing_vmids)
   delegate_to: localhost
   become: false

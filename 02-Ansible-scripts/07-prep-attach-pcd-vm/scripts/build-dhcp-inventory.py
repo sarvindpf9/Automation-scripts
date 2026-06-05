@@ -205,6 +205,14 @@ def normalize_private_key_path(path: str) -> str:
     return path
 
 
+def effective_vm_name(vm_config: dict[str, Any], vm_key: str, prefix: Any) -> str:
+    base_name = str(vm_config.get("vm_name", vm_key))
+    clean_prefix = str(prefix).strip() if prefix else ""
+    if not clean_prefix:
+        return base_name
+    return f"{clean_prefix}-{base_name}"
+
+
 def write_inventory(
     output_path: Path,
     hosts: dict[str, str],
@@ -255,6 +263,7 @@ def main() -> int:
 
     payload = json.load(sys.stdin)
     vms = payload.get("vms", {})
+    vm_name_prefix = payload.get("vm_name_prefix", "")
     qemu_agent_enabled = args.qemu_agent_enabled == "true"
     dhcp_vms = {
         key: config
@@ -285,13 +294,13 @@ def main() -> int:
     deadline = time.monotonic() + args.max_wait
 
     for vm_key, vm_config in vms.items():
-        vm_name = str(vm_config.get("vm_name", vm_key))
+        vm_name = effective_vm_name(vm_config, vm_key, vm_name_prefix)
         static_ip = primary_static_ip(vm_config)
         if static_ip:
             hosts[vm_name] = static_ip
 
     for vm_key, vm_config in dhcp_vms.items():
-        vm_name = str(vm_config.get("vm_name", vm_key))
+        vm_name = effective_vm_name(vm_config, vm_key, vm_name_prefix)
         vm_id = int(vm_config["vm_id"])
         config_result = client.request(
             "GET",

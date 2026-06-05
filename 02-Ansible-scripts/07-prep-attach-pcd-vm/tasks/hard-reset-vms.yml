@@ -9,13 +9,15 @@
     api_timeout: "{{ proxmox_api_timeout }}"
     node: "{{ proxmox_node }}"
     vmid: "{{ item.value.vm_id }}"
-    name: "{{ item.value.vm_name }}"
+    name: "{{ effective_vm_name }}"
     state: stopped
     force: true
     timeout: "{{ proxmox_api_timeout }}"
   loop: "{{ vms | dict2items }}"
   loop_control:
-    label: "{{ item.value.vm_name }}"
+    label: "{{ effective_vm_name }}"
+  vars:
+    effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
   delegate_to: localhost
   become: false
   no_log: true
@@ -30,12 +32,14 @@
     api_timeout: "{{ proxmox_api_timeout }}"
     node: "{{ proxmox_node }}"
     vmid: "{{ item.value.vm_id }}"
-    name: "{{ item.value.vm_name }}"
+    name: "{{ effective_vm_name }}"
     state: started
     timeout: "{{ proxmox_api_timeout }}"
   loop: "{{ vms | dict2items }}"
   loop_control:
-    label: "{{ item.value.vm_name }}"
+    label: "{{ effective_vm_name }}"
+  vars:
+    effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
   delegate_to: localhost
   become: false
   no_log: true

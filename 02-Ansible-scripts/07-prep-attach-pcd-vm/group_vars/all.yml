@@ -24,6 +24,10 @@ ssh_public_key_path: ~/.ssh/id_rsa.pub
 cloud_init_user: ubuntu
 cloud_init_user_password: password
 
+# Optional prefix prepended to each VM name. Leave empty to use vm_name exactly
+# as defined in the vms map.
+vm_name_prefix: ""
+
 # VM deployment map, equivalent to the Terraform vms map.
 vms:
   vm1:

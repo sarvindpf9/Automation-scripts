@@ -21,7 +21,7 @@ Ansible playbooks to clone Proxmox VMs from an existing template, render cloud-i
 │   ├── create-vms.yml
 │   ├── decommission-pcd-hosts.yml # decommission PCD hosts and unmount PCD storage
 │   ├── delete-vms.yml
-│   ├── dhcp-to-static.yml        # convert a DHCP interface to a static netplan entry
+│   ├── dhcp-to-static.yml        # convert DHCP netplan interfaces to static entries
 │   └── prepare-pcd-storage.yml   # add hosts entries and configure PCD NFS paths
 ├── tasks/
 │   ├── cloud-ctl.yml              # download and execute pcdctl setup
@@ -37,7 +37,7 @@ Ansible playbooks to clone Proxmox VMs from an existing template, render cloud-i
 │   ├── preflight.yml
 │   └── render-snippets.yml
 └── templates/
-    ├── netplan-static.yaml.j2     # static netplan config rendered by dhcp-to-static
+    ├── netplan-static.yaml.j2     # legacy single-interface static netplan template
     ├── network-data.yaml.j2
     ├── proxmox-net.yml.j2
     ├── user-data.yaml.j2
@@ -126,6 +126,7 @@ snippet_directory: /var/lib/vz/snippets
 ssh_public_key_path: ~/.ssh/id_rsa.pub
 cloud_init_user: ubuntu
 cloud_init_user_password: "changeme"
+vm_name_prefix: jp1
 
 vms:
   web-01:
@@ -230,8 +231,7 @@ Optional DHCP-to-static conversion for guest VM(s):
 ```bash
 ansible-playbook \
   -i generated/vm-inventory.yml \
-  playbooks/dhcp-to-static.yml \
-  -e target_interface=<INTERFACE_NAME>
+  playbooks/dhcp-to-static.yml
 ```
 
 ```bash
@@ -484,6 +484,7 @@ Runs against guest VMs (not the Proxmox node) to convert a DHCP-assigned interfa
 | `ssh_public_key_path` | Yes | Controller-side public key path injected into cloud-init |
 | `cloud_init_user` | No | Cloud-init user, default `ubuntu` |
 | `cloud_init_user_password` | No | Password set through cloud-init |
+| `vm_name_prefix` | No | Optional prefix prepended to every `vms.*.vm_name`; leave empty to preserve VM names exactly as defined |
 | `vms` | Yes | Map of VM definitions; each `vm_id` must be a bare integer |
 | `disk_format` | No | Disk image format: `raw` (default, works on LVM-thin and directory storage) or `qcow2` (directory-type storage only — local dir, NFS, CIFS). Using `qcow2` against an LVM-thin pool returns a 500 error from Proxmox. |
 | `start_vms` | No | Start VMs after clone/configure |
@@ -507,7 +508,10 @@ Runs against guest VMs (not the Proxmox node) to convert a DHCP-assigned interfa
 The `vms` map in `group_vars/all.yml` controls VM settings and network layout.
 
 - Each VM entry requires `vm_name`, `vm_id` (integer), `memory_mb`, `cores`, `sockets`, `disk_size_gb`, and `network_interfaces`.
+- `vm_name_prefix` is prepended to every VM name when set. For example, `vm_name_prefix: jp1` and `vm_name: web-01` creates `jp1-web-01`; an empty prefix preserves `web-01`.
 - `network_interfaces` are rendered in order as `net0`, `net1`, etc.
+- Proxmox may auto-assign NIC MACs. On first boot, the cloud-init user-data script reads the actual virtio NIC order, guest interface names, and learned MAC addresses, then rewrites `/etc/netplan/50-cloud-init.yaml` so placeholder `eth0`, `eth1`, etc. become the real guest names such as `ens18`, `ens19`.
+- Set `macaddr` on a NIC only when you need to preserve or supply a specific MAC address. When set, the same MAC is written into both Proxmox NIC config and the rendered netplan.
 - `vlan_id` on a network interface is applied as the Proxmox NIC VLAN tag.
 - Set `dhcp4: true` on an interface to obtain an address via DHCP; omit `ip`, `gw`, and `dns` when doing so.
 - VLAN subinterfaces under `vlan_devices:` are rendered inside the guest on top of the parent interface.
@@ -523,6 +527,16 @@ The `network-data.yaml.j2` template renders the interface as:
 ```yaml
 ethernets:
   eth0:
+    dhcp4: true
+```
+
+During first boot, `/usr/local/bin/pf9-render-netplan.sh` rewrites that placeholder with the learned guest interface name and MAC. For example, if Proxmox presents the first virtio NIC as `ens18`, the applied netplan becomes:
+
+```yaml
+ethernets:
+  ens18:
+    match:
+      macaddress: "<LEARNED_MAC_ADDRESS>"
     dhcp4: true
 ```
 
@@ -732,7 +746,7 @@ ansible-playbook playbooks/create-vms.yml \
 
 ## DHCP-to-static conversion
 
-`playbooks/dhcp-to-static.yml` runs against guest VMs after first boot to convert a DHCP-assigned address into a permanent static netplan entry. It reads the current IP, prefix, gateway, and nameservers directly from live Ansible facts and writes a static `/etc/netplan/50-cloud-init.yaml`. It also drops a cloud-init override at `/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg` so cloud-init does not overwrite the static config on the next reboot.
+`playbooks/dhcp-to-static.yml` runs against guest VMs after first boot to convert DHCP-assigned addresses into permanent static netplan entries. By default it converts every ethernet stanza in the target netplan file with `dhcp4: true`. It reads each current IP and prefix from live Ansible facts, updates only those DHCP-enabled ethernet stanzas, and preserves other ethernet/VLAN config such as interfaces with `dhcp4: false`. It also drops a cloud-init override at `/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg` so cloud-init does not overwrite the static config on the next reboot.
 
 > **Target host:** the IP address in `-i <IP>,` is the **guest VM's IP**, not the Proxmox hypervisor. This playbook SSHes directly into the guest OS to read its network state and write the netplan config. The Proxmox API is not used.
 
@@ -742,14 +756,15 @@ ansible-playbook playbooks/create-vms.yml \
 
 | Variable | Default | Description |
 | ---- | ---- | ---- |
-| `target_interface` | `ansible_facts['default_ipv4']['interface']` | NIC to convert. Defaults to the interface that holds the default route. Override with the interface name, e.g. `ens18`. |
-| `netplan_config_file` | `/etc/netplan/50-cloud-init.yaml` | Netplan file to write. Override when you want to write to a separate file instead of replacing the cloud-init one. |
+| `target_interface` | unset | Optional single DHCP NIC to convert, e.g. `ens18`. When unset, all ethernets with `dhcp4: true` in `netplan_config_file` are converted. |
+| `target_interfaces` | unset | Optional list of DHCP NICs to convert, e.g. `['ens18', 'ens19']`. Takes precedence over `target_interface`. |
+| `netplan_config_file` | `/etc/netplan/50-cloud-init.yaml` | Netplan file to update in place. Non-target interface and VLAN config is preserved. |
 | `nameservers` | `ansible_facts['dns']['nameservers']` (gathered from host), then `['8.8.8.8']` | List of nameserver IP addresses to write into the static netplan config. When set, this value takes priority over whatever the host currently reports via gathered DNS facts. Accepts one or more IPs. |
 | `target_hosts` | `all` | Ansible host pattern; useful when the inventory contains more hosts than you want to convert in a single run. |
 
 ### dhcp-to-static usage
 
-Convert the default-route interface on a single VM (inline inventory):
+Convert all DHCP-enabled ethernets on a single VM (inline inventory):
 
 ```bash
 ansible-playbook playbooks/dhcp-to-static.yml \
@@ -765,6 +780,16 @@ ansible-playbook playbooks/dhcp-to-static.yml \
   -i 192.168.100.21, \
   -u ubuntu --private-key ~/.ssh/id_rsa \
   -e target_interface=ens18 \
+  -e ansible_become_pass=<sudo_password>
+```
+
+Convert multiple specific DHCP interfaces:
+
+```bash
+ansible-playbook playbooks/dhcp-to-static.yml \
+  -i 192.168.100.21, \
+  -u ubuntu --private-key ~/.ssh/id_rsa \
+  -e '{"target_interfaces": ["ens18", "ens19"]}' \
   -e ansible_become_pass=<sudo_password>
 ```
 
@@ -816,19 +841,19 @@ ansible-playbook playbooks/dhcp-to-static.yml \
 
 ### What the playbook does
 
-1. Resolves the target interface (default: the interface holding the default route).
-2. Asserts that `ansible_facts[iface].ipv4` is populated — fails fast with a clear message if the interface has no IPv4 address in gathered facts.
-3. Resolves nameservers using the following priority: user-supplied `nameservers` variable -> `ansible_facts['dns']['nameservers']` gathered from the host -> fallback `['8.8.8.8']`. Captures `address`, `prefix`, and `gateway` from live facts.
-4. Writes `/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg` to prevent cloud-init from regenerating the netplan file on reboot.
-5. Renders `templates/netplan-static.yaml.j2` to the target netplan file.
-6. Runs `netplan apply` only when the file changed.
+1. Reads and parses `netplan_config_file`.
+2. Resolves target interfaces from `target_interfaces`, `target_interface`, or all ethernet stanzas with `dhcp4: true`.
+3. Asserts that each target interface has `dhcp4: true` in netplan and an IPv4 address in gathered facts.
+4. Resolves nameservers using the following priority: user-supplied `nameservers` variable -> `ansible_facts['dns']['nameservers']` gathered from the host -> fallback `['8.8.8.8']`.
+5. Updates only the target ethernet stanzas to `dhcp4: false` with static `addresses` and `nameservers`. It adds a default route only to the interface currently holding the default route.
+6. Writes `/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg` to prevent cloud-init from regenerating the netplan file on reboot.
+7. Writes the merged netplan YAML back with a backup and runs `netplan apply` only when the file changed.
 
 ### Rendered netplan output
 
-For an interface `ens18` with address `192.168.100.21`, prefix `24`, gateway `192.168.100.1`, and a user-supplied `nameservers` list of `[10.0.0.53, 10.0.0.54]`:
+For DHCP interfaces `ens18` and `ens19`, where `ens18` is the default-route interface with gateway `192.168.100.1`, and a user-supplied `nameservers` list of `[10.0.0.53, 10.0.0.54]`:
 
 ```yaml
-# Managed by Ansible. Manual edits will be overwritten on next run.
 network:
   version: 2
   ethernets:
@@ -839,6 +864,14 @@ network:
       routes:
         - to: default
           via: 192.168.100.1
+      nameservers:
+        addresses:
+          - 10.0.0.53
+          - 10.0.0.54
+    ens19:
+      dhcp4: false
+      addresses:
+        - 192.168.101.21/24
       nameservers:
         addresses:
           - 10.0.0.53

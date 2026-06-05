@@ -1,7 +1,14 @@
 version: 2
 ethernets:
 {% for nic in vm_config.network_interfaces %}
-  eth{{ loop.index0 }}:
+{% set nic_index = loop.index0 %}
+{% set nic_macaddr = nic.macaddr | default('', true) %}
+  eth{{ nic_index }}:
+{% if nic_macaddr | length > 0 %}
+    match:
+      macaddress: "{{ nic_macaddr | lower }}"
+    set-name: eth{{ nic_index }}
+{% endif %}
 {% if nic.dhcp4 | default(false) %}
     dhcp4: true
 {% else %}

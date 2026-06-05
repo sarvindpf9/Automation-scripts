@@ -22,9 +22,18 @@
   loop_control:
     label: "{{ item.key }}"
 
+- name: Build list of effective VM delete target names
+  ansible.builtin.set_fact:
+    declared_vm_names: "{{ (declared_vm_names | default([])) + [effective_vm_name] }}"
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  vars:
+    effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
+
 - name: Validate VM delete target uniqueness
   ansible.builtin.assert:
     that:
       - (vms | dict2items | map(attribute='value.vm_id') | list | unique | length) == (vms | length)
-      - (vms | dict2items | map(attribute='value.vm_name') | list | unique | length) == (vms | length)
+      - (declared_vm_names | unique | length) == (declared_vm_names | length)
     fail_msg: "VM names and VM IDs must be unique across the vms map."

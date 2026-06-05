@@ -10,25 +10,27 @@
 - name: Render cloud-init user-data snippets
   ansible.builtin.template:
     src: ../templates/user-data.yaml.j2
-    dest: "{{ snippet_directory }}/{{ item.value.vm_name | regex_replace('[^a-zA-Z0-9-]', '-') }}-user-data.yaml"
+    dest: "{{ snippet_directory }}/{{ effective_vm_name | regex_replace('[^a-zA-Z0-9-]', '-') }}-user-data.yaml"
     owner: root
     group: root
     mode: "0644"
   loop: "{{ vms | dict2items }}"
   loop_control:
-    label: "{{ item.value.vm_name }}"
+    label: "{{ effective_vm_name }}"
   vars:
     vm_config: "{{ item.value }}"
+    effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
 
 - name: Render cloud-init network-data snippets
   ansible.builtin.template:
     src: ../templates/network-data.yaml.j2
-    dest: "{{ snippet_directory }}/{{ item.value.vm_name | regex_replace('[^a-zA-Z0-9-]', '-') }}-network-data.yaml"
+    dest: "{{ snippet_directory }}/{{ effective_vm_name | regex_replace('[^a-zA-Z0-9-]', '-') }}-network-data.yaml"
     owner: root
     group: root
     mode: "0644"
   loop: "{{ vms | dict2items }}"
   loop_control:
-    label: "{{ item.value.vm_name }}"
+    label: "{{ effective_vm_name }}"
   vars:
     vm_config: "{{ item.value }}"
+    effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
