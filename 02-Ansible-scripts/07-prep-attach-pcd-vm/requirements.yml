@@ -2,3 +2,5 @@
 collections:
   - name: community.proxmox
     version: ">=1.6.0"
+  - name: ansible.posix
+    version: ">=1.5.0"

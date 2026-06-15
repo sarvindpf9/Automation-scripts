@@ -299,14 +299,26 @@ pcd_storage_host_entries:
       - <HOST_ALIAS_2>
 ```
 
-The `/etc/fstab` entries are fixed in `tasks/prepare-pcd-storage.yml` and are applied by the same play:
+The default `/etc/fstab` entries come from `pcd_storage_nfs_mounts` in
+`group_vars/all.yml`:
 
 ```text
 10.96.7.20:/mnt/nfsshare/glance      /var/opt/imagelibrary/data      nfs   vers=4,proto=tcp   0       0
 10.96.7.20:/mnt/nfsshare/ephemeral   /opt/data/instances             nfs   vers=4,proto=tcp   0       0
 ```
 
-Before writing `/etc/fstab`, the play checks for an existing matching fstab line and whether each mountpoint is already mounted; entries that already satisfy either condition are skipped. After updating `/etc/fstab`, the play runs `systemctl daemon-reload` when the file changed, then runs `mount -a`. Recursive ownership is still attempted when `pf9` or `pf9group` is absent, but the play continues if the OS cannot resolve the account or group yet.
+Override the complete list when the NFS source or local mount paths differ:
+
+```yaml
+pcd_storage_nfs_mounts:
+  - src: <NFS_SERVER_IP>:/<NFS_EXPORT_PATH>
+    path: <HOST_MOUNT_PATH>
+```
+
+The play validates each source and absolute mount path, creates the mount
+directories, manages `/etc/fstab`, and mounts each export. Recursive ownership
+is still attempted when `pf9` or `pf9group` is absent, but the play continues
+if the OS cannot resolve the account or group yet.
 
 Override any variable with `-e`:
 

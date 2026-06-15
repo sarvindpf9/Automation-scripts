@@ -129,6 +129,13 @@ cloud_region_name: <PCD_REGION_NAME>
 # Set pcd_storage_hosts to the inventory group or host pattern to configure.
 pcd_storage_hosts: proxmox_vms
 pcd_storage_host_entries: []
+# NFS exports mounted on each PCD host. Override the full list when the NFS
+# server, export paths, or local mount paths differ from these defaults.
+pcd_storage_nfs_mounts:
+  - src: 10.96.7.20:/mnt/nfsshare/glance
+    path: /var/opt/imagelibrary/data
+  - src: 10.96.7.20:/mnt/nfsshare/ephemeral
+    path: /opt/data/instances
 # Example:
 # pcd_storage_host_entries:
 #   - ip: <IP_ADDRESS>

@@ -30,74 +30,60 @@
     state: present
     backup: true
 
+- name: Validate PCD NFS mount definitions
+  ansible.builtin.assert:
+    that:
+      - pcd_storage_nfs_mounts is sequence
+      - pcd_storage_nfs_mounts is not string
+      - pcd_storage_nfs_mounts | length > 0
+      - item.src is defined
+      - item.src | length > 0
+      - item.src is match('^[^:\s]+:/\S+$')
+      - item.src is not match('^<.*>$')
+      - item.path is defined
+      - item.path is match('^/')
+      - item.path is not match('^<.*>$')
+    fail_msg: >-
+      Each pcd_storage_nfs_mounts item must define src as
+      NFS_SERVER:/EXPORT_PATH and path as an absolute host mount path.
+  loop: "{{ pcd_storage_nfs_mounts }}"
+  loop_control:
+    label: "{{ item.path | default(item.src | default('invalid mount')) }}"
+
+- name: Validate PCD NFS mount paths are unique
+  ansible.builtin.assert:
+    that:
+      - >-
+        (pcd_storage_nfs_mounts | map(attribute='path') | unique | length)
+        == (pcd_storage_nfs_mounts | length)
+    fail_msg: "Each PCD NFS mount must use a unique host mount path."
+
 - name: Create PCD storage mount directories
   become: true
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: "{{ item.path }}"
     state: directory
+    owner: root
+    group: root
     mode: '0755'
-  loop:
-    - /var/opt/imagelibrary/data
-    - /opt/data/instances
-
-- name: Define PCD NFS mount entries
-  ansible.builtin.set_fact:
-    pcd_storage_nfs_mounts:
-      - src: 10.96.7.20:/mnt/nfsshare/glance
-        path: /var/opt/imagelibrary/data
-      - src: 10.96.7.20:/mnt/nfsshare/ephemeral
-        path: /opt/data/instances
-
-- name: Read current fstab content
-  become: true
-  ansible.builtin.slurp:
-    path: /etc/fstab
-  register: pcd_storage_fstab_current
-
-- name: Check current PCD NFS mountpoints
-  become: true
-  ansible.builtin.command:
-    argv:
-      - findmnt
-      - --mountpoint
-      - "{{ item.path }}"
-  register: pcd_storage_findmnt_results
-  changed_when: false
-  failed_when: false
-  loop: "{{ pcd_storage_nfs_mounts }}"
-
-- name: Configure PCD NFS fstab entries
-  become: true
-  ansible.builtin.lineinfile:
-    path: /etc/fstab
-    regexp: "^{{ item.src | regex_escape }}\\s+{{ item.path | regex_escape }}\\s+"
-    line: "{{ item.src }}      {{ item.path }}      nfs   vers=4,proto=tcp   0       0"
-    state: present
-    backup: true
-  register: pcd_storage_fstab_entries
   loop: "{{ pcd_storage_nfs_mounts }}"
   loop_control:
-    index_var: pcd_storage_mount_index
-  vars:
-    pcd_storage_fstab_text: "{{ pcd_storage_fstab_current.content | b64decode }}"
-    pcd_storage_fstab_match: "{{ item.src | regex_escape }}\\s+{{ item.path | regex_escape }}\\s+"
-  when:
-    - pcd_storage_fstab_text is not search(pcd_storage_fstab_match)
-    - pcd_storage_findmnt_results.results[pcd_storage_mount_index].rc != 0
+    label: "{{ item.path }}"
 
-- name: Reload systemd after fstab update
+- name: Configure and mount PCD NFS storage
   become: true
-  ansible.builtin.command:
-    cmd: systemctl daemon-reload
-  changed_when: false
-  when: pcd_storage_fstab_entries.changed
-
-- name: Mount configured fstab entries
-  become: true
-  ansible.builtin.command:
-    cmd: mount -a
-  changed_when: false
-  when: pcd_storage_fstab_entries.changed
+  ansible.posix.mount:
+    src: "{{ item.src }}"
+    path: "{{ item.path }}"
+    fstype: nfs
+    opts: vers=4,proto=tcp
+    dump: "0"
+    passno: "0"
+    state: mounted
+    backup: true
+  loop: "{{ pcd_storage_nfs_mounts }}"
+  loop_control:
+    label: "{{ item.src }} -> {{ item.path }}"
 
 - name: Check pf9 user exists before setting ownership
   become: true
@@ -123,13 +109,13 @@
 - name: Ensure PCD storage directory ownership is recursive
   become: true
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: "{{ item.path }}"
     state: directory
     owner: pf9
     group: pf9group
     recurse: true
-  loop:
-    - /var/opt/imagelibrary/
-    - /opt/data/instances
+  loop: "{{ pcd_storage_nfs_mounts }}"
+  loop_control:
+    label: "{{ item.path }}"
   register: pcd_storage_ownership_result
   failed_when: false
