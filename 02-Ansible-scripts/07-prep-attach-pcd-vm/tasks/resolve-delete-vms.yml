@@ -1,0 +1,95 @@
+---
+- name: Query all VMs cluster-wide for delete resolution
+  community.proxmox.proxmox_vm_info:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_password: "{{ proxmox_api_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    type: qemu
+  register: _delete_cluster_vm_info
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Validate delete targets against cluster inventory
+  ansible.builtin.assert:
+    that:
+      - _delete_name_matches | length == 1
+      - not (_delete_name_matches[0].template | default(false) | bool)
+      - >-
+        item.value.vm_id is not defined
+        or item.value.vm_id | int == _delete_name_matches[0].vmid | int
+    fail_msg: >-
+      Delete target '{{ effective_vm_name }}' must match exactly one cluster
+      QEMU VM, must not be a template, and any supplied vm_id must match that
+      VM. Refusing unsafe deletion.
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ effective_vm_name }}"
+  vars:
+    effective_vm_name: >-
+      {{
+        [
+          vm_name_prefix | default('', true) | trim,
+          item.value.vm_name
+        ]
+        | reject('equalto', '')
+        | join('-')
+      }}
+    _delete_name_matches: >-
+      {{
+        _delete_cluster_vm_info.proxmox_vms
+        | selectattr('name', 'equalto', effective_vm_name)
+        | list
+      }}
+
+- name: Initialize resolved delete VM definitions
+  ansible.builtin.set_fact:
+    resolved_delete_vms: {}
+
+- name: Build resolved delete VM definitions
+  ansible.builtin.set_fact:
+    resolved_delete_vms: >-
+      {{
+        resolved_delete_vms
+        | combine(
+            {
+              item.key: item.value
+              | combine(
+                  {
+                    'vm_id': _delete_name_matches[0].vmid | int,
+                    'proxmox_node': _delete_name_matches[0].node
+                  }
+                )
+            }
+          )
+      }}
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ effective_vm_name }}"
+  vars:
+    effective_vm_name: >-
+      {{
+        [
+          vm_name_prefix | default('', true) | trim,
+          item.value.vm_name
+        ]
+        | reject('equalto', '')
+        | join('-')
+      }}
+    _delete_name_matches: >-
+      {{
+        _delete_cluster_vm_info.proxmox_vms
+        | selectattr('name', 'equalto', effective_vm_name)
+        | list
+      }}
+
+- name: Show resolved delete targets
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.key }}: {{ item.value.vm_name }} →
+      vm_id={{ item.value.vm_id }}, node={{ item.value.proxmox_node }}
+  loop: "{{ resolved_delete_vms | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"

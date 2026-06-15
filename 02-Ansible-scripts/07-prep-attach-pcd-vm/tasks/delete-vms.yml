@@ -1,7 +1,5 @@
 ---
-# Sends a force-stop signal before deletion. ignore_errors covers VMs that are
-# already stopped or do not exist. The subsequent delete task handles removal
-# regardless of whether this step changes anything.
+# Delete targets are resolved cluster-wide before this task file is imported.
 - name: Force stop VMs before deletion
   community.proxmox.proxmox_kvm:
     api_host: "{{ proxmox_api_host }}"
@@ -9,18 +7,17 @@
     api_user: "{{ proxmox_api_user }}"
     api_password: "{{ proxmox_api_password }}"
     validate_certs: "{{ proxmox_validate_certs }}"
-    node: "{{ proxmox_node }}"
+    node: "{{ item.value.proxmox_node }}"
     vmid: "{{ item.value.vm_id }}"
     state: stopped
     force: true
     timeout: 60
-  loop: "{{ vms | dict2items }}"
+  loop: "{{ resolved_delete_vms | dict2items }}"
   loop_control:
     label: "{{ effective_vm_name }}"
   vars:
     effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
   when: delete_force | bool
-  ignore_errors: true
   delegate_to: localhost
   become: false
   no_log: true
@@ -32,14 +29,14 @@
     api_user: "{{ proxmox_api_user }}"
     api_password: "{{ proxmox_api_password }}"
     validate_certs: "{{ proxmox_validate_certs }}"
-    node: "{{ proxmox_node }}"
+    node: "{{ item.value.proxmox_node }}"
     vmid: "{{ item.value.vm_id }}"
     name: "{{ effective_vm_name }}"
     state: absent
     force: "{{ delete_force | bool }}"
     purge: "{{ delete_purge | bool }}"
     timeout: "{{ proxmox_api_timeout }}"
-  loop: "{{ vms | dict2items }}"
+  loop: "{{ resolved_delete_vms | dict2items }}"
   loop_control:
     label: "{{ effective_vm_name }}"
   vars:

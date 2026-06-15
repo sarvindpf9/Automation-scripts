@@ -16,8 +16,16 @@
   ansible.builtin.assert:
     that:
       - item.value.vm_name | length > 0
-      - item.value.vm_id is number
-    fail_msg: "Each VM delete target must define vm_name and vm_id."
+      - >-
+        item.value.vm_id is not defined
+        or (
+          item.value.vm_id is number
+          and item.value.vm_id | int >= 100
+          and item.value.vm_id | int <= 999999
+        )
+    fail_msg: >-
+      Each VM delete target must define vm_name. vm_id is optional, but must
+      be an integer from 100 through 999999 when provided.
   loop: "{{ vms | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
@@ -34,6 +42,18 @@
 - name: Validate VM delete target uniqueness
   ansible.builtin.assert:
     that:
-      - (vms | dict2items | map(attribute='value.vm_id') | list | unique | length) == (vms | length)
+      - >-
+        (_explicit_delete_vm_ids | unique | length)
+        == (_explicit_delete_vm_ids | length)
       - (declared_vm_names | unique | length) == (declared_vm_names | length)
     fail_msg: "VM names and VM IDs must be unique across the vms map."
+  vars:
+    _explicit_delete_vm_ids: >-
+      {{
+        vms
+        | dict2items
+        | selectattr('value.vm_id', 'defined')
+        | map(attribute='value.vm_id')
+        | map('int')
+        | list
+      }}

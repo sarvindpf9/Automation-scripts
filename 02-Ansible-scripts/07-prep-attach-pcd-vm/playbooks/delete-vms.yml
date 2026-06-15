@@ -8,5 +8,8 @@
     - name: Run delete preflight checks
       ansible.builtin.import_tasks: ../tasks/delete-preflight.yml
 
+    - name: Resolve delete targets
+      ansible.builtin.import_tasks: ../tasks/resolve-delete-vms.yml
+
     - name: Delete VMs
       ansible.builtin.import_tasks: ../tasks/delete-vms.yml

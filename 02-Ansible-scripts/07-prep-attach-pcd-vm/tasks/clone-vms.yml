@@ -1,19 +1,6 @@
 ---
-- name: Query existing VMs on node
-  community.proxmox.proxmox_vm_info:
-    api_host: "{{ proxmox_api_host }}"
-    api_port: "{{ proxmox_api_port }}"
-    api_user: "{{ proxmox_api_user }}"
-    api_password: "{{ proxmox_api_password }}"
-    validate_certs: "{{ proxmox_validate_certs }}"
-    node: "{{ proxmox_node }}"
-  register: _proxmox_vm_info
-  delegate_to: localhost
-  become: false
-
-- name: Build set of existing VM IDs
-  ansible.builtin.set_fact:
-    existing_vmids: "{{ _proxmox_vm_info.proxmox_vms | map(attribute='vmid') | list }}"
+# existing_vmids is set cluster-wide by tasks/allocate-vm-ids.yml.
+# Any VM ID present there skips the clone (idempotency) and cloud-init drive steps below.
 
 - name: Clone VMs from template
   community.proxmox.proxmox_kvm:
@@ -31,7 +18,7 @@
     full: "{{ clone_full }}"
     format: "{{ disk_format }}"
     timeout: "{{ proxmox_api_timeout }}"
-  loop: "{{ vms | dict2items }}"
+  loop: "{{ resolved_vms | dict2items }}"
   loop_control:
     label: "{{ effective_vm_name }}"
   vars:
@@ -66,7 +53,7 @@
     update: true
     update_unsafe: true
     state: present
-  loop: "{{ vms | dict2items }}"
+  loop: "{{ resolved_vms | dict2items }}"
   loop_control:
     label: "{{ effective_vm_name }}"
   vars:
@@ -89,7 +76,7 @@
     disk: scsi0
     size: "{{ item.value.disk_size_gb }}G"
     state: resized
-  loop: "{{ vms | dict2items }}"
+  loop: "{{ resolved_vms | dict2items }}"
   loop_control:
     label: "{{ effective_vm_name }}"
   vars:
@@ -110,7 +97,7 @@
     vmid: "{{ item.value.vm_id }}"
     name: "{{ effective_vm_name }}"
     state: started
-  loop: "{{ vms | dict2items }}"
+  loop: "{{ resolved_vms | dict2items }}"
   loop_control:
     label: "{{ effective_vm_name }}"
   vars:
@@ -132,7 +119,7 @@
     vmid: "{{ item.value.vm_id }}"
     name: "{{ effective_vm_name }}"
     delete: ide2
-  loop: "{{ vms | dict2items }}"
+  loop: "{{ resolved_vms | dict2items }}"
   loop_control:
     label: "{{ effective_vm_name }}"
   vars:

@@ -15,6 +15,13 @@ datastore_id: <DATASTORE_ID>
 cloudinit_drive_datastore_id: <DATASTORE_ID>
 snippet_datastore_id: local
 
+# VM ID auto-allocation range. vm_id is optional in the vms map below —
+# omit it to auto-assign the next free ID across the entire cluster.
+# IDs are picked from [vm_id_start, vm_id_end] skipping any already in use.
+# Must be >= 100 (Proxmox minimum). template_vm_id is always excluded.
+vm_id_start: 4000
+vm_id_end: 8000
+
 # Filesystem path on the Proxmox node for snippet_datastore_id.
 # For default local storage this is normally /var/lib/vz/snippets.
 snippet_directory: /var/lib/vz/snippets
@@ -29,10 +36,12 @@ cloud_init_user_password: password
 vm_name_prefix: ""
 
 # VM deployment map, equivalent to the Terraform vms map.
+# vm_id is optional: omit it to auto-assign the next free ID cluster-wide.
+# Set it explicitly only when you need to pin a specific ID.
 vms:
   vm1:
     vm_name: <VM1_NAME>
-    vm_id: <VM1_ID>
+    # vm_id: <VM1_ID>   # optional — auto-allocated from vm_id_start..vm_id_end if omitted
     memory_mb: 4096
     cores: 4
     sockets: 1
@@ -55,7 +64,7 @@ vms:
             gw: <GATEWAY_IP>
   vm2:
     vm_name: <VM2_NAME>
-    vm_id: <VM2_ID>
+    # vm_id: <VM2_ID>   # optional — auto-allocated from vm_id_start..vm_id_end if omitted
     memory_mb: 4096
     cores: 4
     sockets: 1

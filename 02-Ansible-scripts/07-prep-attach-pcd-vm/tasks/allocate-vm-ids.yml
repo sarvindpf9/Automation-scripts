@@ -1,0 +1,94 @@
+---
+- name: Query all VMs cluster-wide (no node filter = all cluster nodes)
+  community.proxmox.proxmox_vm_info:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_password: "{{ proxmox_api_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+  register: _cluster_vm_info
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Build cluster ID and name lookup structures
+  ansible.builtin.set_fact:
+    _cluster_vm_ids: "{{ _cluster_vm_info.proxmox_vms | map(attribute='vmid') | map('int') | list }}"
+    _cluster_name_to_id: "{{ _cluster_vm_info.proxmox_vms | items2dict(key_name='name', value_name='vmid') }}"
+
+- name: Validate explicit vm_id values do not conflict
+  ansible.builtin.assert:
+    that:
+      - item.value.vm_id | int != template_vm_id | int
+      - >-
+        item.value.vm_id | int not in _cluster_vm_ids
+        or _cluster_name_to_id.get(effective_vm_name, none) == item.value.vm_id | int
+    fail_msg: >-
+      vm_id {{ item.value.vm_id }} for '{{ item.key }}' is already in use by a
+      different VM in the cluster, or equals template_vm_id {{ template_vm_id }}.
+      Remove vm_id to auto-allocate, or choose an unused ID.
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  vars:
+    effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
+  when: item.value.vm_id is defined
+
+# Extra vars cannot be overwritten by set_fact, so keep the user-provided vms map
+# unchanged and publish the allocation result under resolved_vms.
+- name: Validate explicit vm_id values are unique within this run
+  ansible.builtin.assert:
+    that:
+      - (_explicit_ids | unique | length) == (_explicit_ids | length)
+    fail_msg: "Explicit vm_id values must be unique across the vms map."
+  vars:
+    _explicit_ids: >-
+      {{
+        vms
+        | dict2items
+        | selectattr('value.vm_id', 'defined')
+        | map(attribute='value.vm_id')
+        | map('int')
+        | list
+      }}
+
+# Single task: allocate IDs and write vm_id into every resolved entry.
+# Uses a Jinja2 namespace (mutable loop state) to track in-flight IDs across
+# iterations, then tojson/from_json to return a native dict rather than a string.
+- name: Allocate VM IDs and build resolved VM definitions
+  ansible.builtin.set_fact:
+    resolved_vms: "{{ _vms_json | from_json }}"
+    existing_vmids: "{{ _cluster_vm_ids }}"
+  vars:
+    _explicit_ids: >-
+      {{ vms | dict2items
+             | selectattr('value.vm_id', 'defined')
+             | map(attribute='value.vm_id')
+             | map('int')
+             | list }}
+    _taken_base: "{{ ([template_vm_id | int] + _cluster_vm_ids + _explicit_ids) | unique | list }}"
+    _vms_json: >-
+      {%- set ns = namespace(taken=_taken_base | list, result={}) -%}
+      {%- for key, vm in vms.items() -%}
+        {%- if vm.vm_id is defined -%}
+          {%- set ns.result = ns.result | combine({key: vm}) -%}
+        {%- else -%}
+          {%- set eff = ([vm_name_prefix | default('', true) | trim, vm.vm_name] | reject('equalto', '') | join('-')) -%}
+          {%- set ex_id = _cluster_name_to_id.get(eff, none) -%}
+          {%- if ex_id is not none -%}
+            {%- set fid = ex_id | int -%}
+          {%- else -%}
+            {%- set fid = (range(vm_id_start | int, vm_id_end | int + 1) | list | difference(ns.taken) | sort | first) | int -%}
+          {%- endif -%}
+          {%- set ns.taken = ns.taken + [fid] -%}
+          {%- set ns.result = ns.result | combine({key: vm | combine({'vm_id': fid})}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ ns.result | tojson }}
+
+- name: Show resolved VM ID assignments
+  ansible.builtin.debug:
+    msg: "{{ item.key }}: {{ item.value.vm_name }} → vm_id={{ item.value.vm_id }}"
+  loop: "{{ resolved_vms | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"

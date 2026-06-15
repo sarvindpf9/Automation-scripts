@@ -8,6 +8,9 @@
     - name: Run preflight checks
       ansible.builtin.import_tasks: ../tasks/preflight.yml
 
+    - name: Allocate VM IDs
+      ansible.builtin.import_tasks: ../tasks/allocate-vm-ids.yml
+
     - name: Render cloud-init snippets
       ansible.builtin.import_tasks: ../tasks/render-snippets.yml
 

@@ -9,7 +9,9 @@ cloud_init_user: ubuntu
 vms:
   single_nic_vm:
     vm_name: <SINGLE_NIC_VM_NAME>
-    vm_id: <SINGLE_NIC_VM_ID>
+    # vm_id is optional. Omit it to auto-assign the next free ID cluster-wide.
+    # Set it explicitly (integer, 100–999999) to pin a specific ID.
+    # vm_id: 101
     memory_mb: 4096
     cores: 4
     sockets: 1
@@ -28,7 +30,7 @@ vms:
   # unknown at deploy time.
   single_nic_dhcp_vm:
     vm_name: <DHCP_VM_NAME>
-    vm_id: <DHCP_VM_ID>
+    # vm_id: 102
     memory_mb: 4096
     cores: 4
     sockets: 1

@@ -45,7 +45,7 @@
       - "{{ guest_agent_inventory_poll_interval_seconds | string }}"
       - --qemu-agent-enabled
       - "{{ (qemu_agent_enabled | bool) | ternary('true', 'false') }}"
-    stdin: "{{ {'vms': vms, 'vm_name_prefix': vm_name_prefix | default('', true)} | to_json }}"
+    stdin: "{{ {'vms': resolved_vms, 'vm_name_prefix': vm_name_prefix | default('', true)} | to_json }}"
   environment:
     PROXMOX_API_PASSWORD: "{{ proxmox_api_password }}"
   register: generated_guest_inventory_result

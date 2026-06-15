@@ -21,9 +21,9 @@
   ansible.builtin.assert:
     that:
       - item.value.vm_name | length > 0
-      - item.value.vm_id is number
-      - item.value.vm_id >= 100
-      - item.value.vm_id <= 999999
+      # vm_id is optional — validated here only when explicitly set.
+      # Auto-allocation and cluster-wide uniqueness are enforced in allocate-vm-ids.yml.
+      - item.value.vm_id is not defined or (item.value.vm_id is number and item.value.vm_id | int >= 100 and item.value.vm_id | int <= 999999)
       - item.value.memory_mb is number
       - item.value.memory_mb >= 512
       - item.value.cores is number
@@ -32,7 +32,7 @@
       - item.value.sockets >= 1
       - item.value.network_interfaces is sequence
       - item.value.network_interfaces | length > 0
-    fail_msg: "Each VM must define vm_name, vm_id, memory_mb, cores, sockets, and network_interfaces."
+    fail_msg: "Each VM must define vm_name, memory_mb, cores, sockets, and network_interfaces. vm_id is optional (auto-allocated if omitted, must be 100–999999 if set)."
   loop: "{{ vms | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
@@ -50,13 +50,13 @@
   vars:
     effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
 
-- name: Validate VM identity and IP uniqueness
+- name: Validate VM name and IP uniqueness
   ansible.builtin.assert:
     that:
-      - (vms | dict2items | map(attribute='value.vm_id') | list | unique | length) == (vms | length)
+      # Explicit vm_id uniqueness (within this run) is checked in allocate-vm-ids.yml.
       - (declared_vm_names | unique | length) == (declared_vm_names | length)
       - (declared_vm_ips | unique | length) == (declared_vm_ips | length)
-    fail_msg: "VM names, VM IDs, and all declared interface/VLAN IPs must be unique across the vms map."
+    fail_msg: "VM names and all declared interface/VLAN IPs must be unique across the vms map."
 
 - name: Read SSH public key from controller
   ansible.builtin.set_fact:
