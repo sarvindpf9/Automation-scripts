@@ -11,11 +11,20 @@
     - name: Allocate VM IDs
       ansible.builtin.import_tasks: ../tasks/allocate-vm-ids.yml
 
+    - name: Clone and configure VMs
+      ansible.builtin.import_tasks: ../tasks/clone-vms.yml
+
+    - name: Discover Proxmox-assigned NIC MAC addresses
+      ansible.builtin.import_tasks: ../tasks/discover-vm-macs.yml
+
     - name: Render cloud-init snippets
       ansible.builtin.import_tasks: ../tasks/render-snippets.yml
 
-    - name: Clone and configure VMs
-      ansible.builtin.import_tasks: ../tasks/clone-vms.yml
+    - name: Apply cloud-init configuration
+      ansible.builtin.import_tasks: ../tasks/apply-cloud-init.yml
+
+    - name: Start VMs
+      ansible.builtin.import_tasks: ../tasks/start-vms.yml
 
     - name: Generate guest inventory
       ansible.builtin.import_tasks: ../tasks/generate-guest-inventory.yml

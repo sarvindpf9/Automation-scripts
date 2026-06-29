@@ -1,15 +1,16 @@
 #cloud-config
+{% set effective_cloud_init_user = vm_config.cloud_init_user | default(cloud_init_user) %}
 hostname: {{ effective_vm_name | default(vm_config.vm_name) }}
 manage_etc_hosts: true
 users:
-  - name: {{ cloud_init_user }}
+  - name: {{ effective_cloud_init_user }}
     shell: /bin/bash
     sudo: ALL=(ALL) NOPASSWD:ALL
     ssh_authorized_keys:
       - {{ vm_ssh_public_key }}
 chpasswd:
   list: |
-    {{ cloud_init_user }}:{{ cloud_init_user_password }}
+    {{ effective_cloud_init_user }}:{{ cloud_init_user_password }}
   expire: false
 package_update: false
 write_files:

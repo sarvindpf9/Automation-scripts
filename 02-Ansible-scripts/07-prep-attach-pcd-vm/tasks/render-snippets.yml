@@ -14,7 +14,7 @@
     owner: root
     group: root
     mode: "0644"
-  loop: "{{ resolved_vms | dict2items }}"
+  loop: "{{ (resolved_vms_with_macs | default(resolved_vms)) | dict2items }}"
   loop_control:
     label: "{{ effective_vm_name }}"
   vars:
@@ -28,7 +28,7 @@
     owner: root
     group: root
     mode: "0644"
-  loop: "{{ resolved_vms | dict2items }}"
+  loop: "{{ (resolved_vms_with_macs | default(resolved_vms)) | dict2items }}"
   loop_control:
     label: "{{ effective_vm_name }}"
   vars:

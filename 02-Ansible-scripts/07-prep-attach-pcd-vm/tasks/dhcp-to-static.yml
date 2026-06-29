@@ -1,25 +1,15 @@
 ---
-- name: Resolve netplan configuration path
+- name: Resolve static network backend
   ansible.builtin.set_fact:
-    _netplan_config_file: "{{ netplan_config_file | default('/etc/netplan/50-cloud-init.yaml') }}"
-
-- name: Read current netplan configuration
-  ansible.builtin.slurp:
-    src: "{{ _netplan_config_file }}"
-  become: true
-  register: _netplan_current
-
-- name: Parse current netplan configuration
-  ansible.builtin.set_fact:
-    _netplan_doc: "{{ _netplan_current.content | b64decode | from_yaml }}"
-
-- name: Validate current netplan configuration
-  ansible.builtin.assert:
-    that:
-      - _netplan_doc is mapping
-      - _netplan_doc.network is mapping
-      - _netplan_doc.network.ethernets is mapping
-    fail_msg: "{{ _netplan_config_file }} must contain network.ethernets before DHCP interfaces can be converted."
+    _static_network_backend: >-
+      {{
+        static_network_backend
+        | default(
+            'networkmanager'
+            if ansible_facts.distribution in ['AlmaLinux', 'Rocky']
+            else 'netplan'
+          )
+      }}
 
 - name: Resolve explicitly requested target interfaces
   ansible.builtin.set_fact:
@@ -34,114 +24,268 @@
         else []
       }}
 
-- name: Resolve DHCP interfaces to convert
-  ansible.builtin.set_fact:
-    _dhcp_target_ifaces: >-
-      {{
-        _requested_target_interfaces
-        if _requested_target_interfaces | length > 0
-        else _netplan_doc.network.ethernets
-          | dict2items
-          | selectattr('value.dhcp4', 'defined')
-          | selectattr('value.dhcp4', 'equalto', true)
-          | map(attribute='key')
-          | list
-      }}
-
-- name: Assert DHCP target interfaces are valid
-  ansible.builtin.assert:
-    that:
-      - _dhcp_target_ifaces | length > 0
-      - item in _netplan_doc.network.ethernets
-      - _netplan_doc.network.ethernets[item].dhcp4 | default(false) | bool
-      - ansible_facts[item] is defined
-      - ansible_facts[item].ipv4 is defined
-    fail_msg: "Interface {{ item }} must exist in {{ _netplan_config_file }}, have dhcp4: true, and have a gathered IPv4 address."
-  loop: "{{ _dhcp_target_ifaces }}"
-
-- name: Resolve nameservers for static netplan entries
+- name: Resolve nameservers for static entries
   ansible.builtin.set_fact:
     _static_nameservers: "{{ nameservers | default(ansible_facts.get('dns', {}).get('nameservers', []), true) | default(['8.8.8.8'], true) }}"
 
-- name: Build static netplan entries for DHCP interfaces
-  ansible.builtin.set_fact:
-    _static_interface_configs: "{{ _static_interface_configs | default({}) | combine({item: _static_iface_config}, recursive=True) }}"
-  vars:
-    _static_address: "{{ ansible_facts[item]['ipv4']['address'] }}/{{ ansible_facts[item]['ipv4']['prefix'] }}"
-    _default_route: >-
-      {{
-        {
-          'routes': [
+- name: Convert DHCP netplan interfaces to static
+  when: _static_network_backend == 'netplan'
+  block:
+    - name: Resolve netplan configuration path
+      ansible.builtin.set_fact:
+        _netplan_config_file: "{{ netplan_config_file | default('/etc/netplan/50-cloud-init.yaml') }}"
+
+    - name: Read current netplan configuration
+      ansible.builtin.slurp:
+        src: "{{ _netplan_config_file }}"
+      become: true
+      register: _netplan_current
+
+    - name: Parse current netplan configuration
+      ansible.builtin.set_fact:
+        _netplan_doc: "{{ _netplan_current.content | b64decode | from_yaml }}"
+
+    - name: Validate current netplan configuration
+      ansible.builtin.assert:
+        that:
+          - _netplan_doc is mapping
+          - _netplan_doc.network is mapping
+          - _netplan_doc.network.ethernets is mapping
+        fail_msg: "{{ _netplan_config_file }} must contain network.ethernets before DHCP interfaces can be converted."
+
+    - name: Resolve DHCP interfaces to convert
+      ansible.builtin.set_fact:
+        _dhcp_target_ifaces: >-
+          {{
+            _requested_target_interfaces
+            if _requested_target_interfaces | length > 0
+            else _netplan_doc.network.ethernets
+              | dict2items
+              | selectattr('value.dhcp4', 'defined')
+              | selectattr('value.dhcp4', 'equalto', true)
+              | map(attribute='key')
+              | list
+          }}
+
+    - name: Assert DHCP target interfaces are valid
+      ansible.builtin.assert:
+        that:
+          - _dhcp_target_ifaces | length > 0
+          - item in _netplan_doc.network.ethernets
+          - _netplan_doc.network.ethernets[item].dhcp4 | default(false) | bool
+          - ansible_facts[item] is defined
+          - ansible_facts[item].ipv4 is defined
+        fail_msg: "Interface {{ item }} must exist in {{ _netplan_config_file }}, have dhcp4: true, and have a gathered IPv4 address."
+      loop: "{{ _dhcp_target_ifaces }}"
+
+    - name: Build static netplan entries for DHCP interfaces
+      ansible.builtin.set_fact:
+        _static_interface_configs: "{{ _static_interface_configs | default({}) | combine({item: _static_iface_config}, recursive=True) }}"
+      vars:
+        _static_address: "{{ ansible_facts[item]['ipv4']['address'] }}/{{ ansible_facts[item]['ipv4']['prefix'] }}"
+        _default_route: >-
+          {{
             {
-              'to': 'default',
-              'via': ansible_facts['default_ipv4']['gateway']
+              'routes': [
+                {
+                  'to': 'default',
+                  'via': ansible_facts['default_ipv4']['gateway']
+                }
+              ]
             }
-          ]
-        }
-        if item == ansible_facts.get('default_ipv4', {}).get('interface', '')
-          and ansible_facts.get('default_ipv4', {}).get('gateway', '') | length > 0
-        else {}
-      }}
-    _static_iface_config: >-
-      {{
-        _netplan_doc.network.ethernets[item]
-        | combine(
-            {
-              'dhcp4': false,
-              'addresses': [_static_address],
-              'nameservers': {
-                'addresses': _static_nameservers
-              }
-            },
-            recursive=True
-          )
-        | combine(_default_route, recursive=True)
-      }}
-  loop: "{{ _dhcp_target_ifaces }}"
+            if item == ansible_facts.get('default_ipv4', {}).get('interface', '')
+              and ansible_facts.get('default_ipv4', {}).get('gateway', '') | length > 0
+            else {}
+          }}
+        _static_iface_config: >-
+          {{
+            _netplan_doc.network.ethernets[item]
+            | combine(
+                {
+                  'dhcp4': false,
+                  'addresses': [_static_address],
+                  'nameservers': {
+                    'addresses': _static_nameservers
+                  }
+                },
+                recursive=True
+              )
+            | combine(_default_route, recursive=True)
+          }}
+      loop: "{{ _dhcp_target_ifaces }}"
 
-- name: Merge static entries into current netplan configuration
-  ansible.builtin.set_fact:
-    _updated_netplan_doc: >-
-      {{
-        _netplan_doc
-        | combine(
-            {
-              'network': _netplan_doc.network
-                | combine(
-                    {
-                      'ethernets': _netplan_doc.network.ethernets
-                        | combine(_static_interface_configs, recursive=True)
-                    },
-                    recursive=True
-                  )
-            },
-            recursive=True
-          )
-      }}
+    - name: Merge static entries into current netplan configuration
+      ansible.builtin.set_fact:
+        _updated_netplan_doc: >-
+          {{
+            _netplan_doc
+            | combine(
+                {
+                  'network': _netplan_doc.network
+                    | combine(
+                        {
+                          'ethernets': _netplan_doc.network.ethernets
+                            | combine(_static_interface_configs, recursive=True)
+                        },
+                        recursive=True
+                      )
+                },
+                recursive=True
+              )
+          }}
 
-- name: Disable cloud-init network management
-  ansible.builtin.copy:
-    dest: /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
-    content: "network: {config: disabled}\n"
-    owner: root
-    group: root
-    mode: '0644'
-  become: true
+    - name: Disable cloud-init network management
+      ansible.builtin.copy:
+        dest: /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+        content: "network: {config: disabled}\n"
+        owner: root
+        group: root
+        mode: '0644'
+      become: true
 
-- name: Write merged static netplan configuration
-  ansible.builtin.copy:
-    dest: "{{ _netplan_config_file }}"
-    content: "{{ _updated_netplan_doc | to_nice_yaml(indent=2, sort_keys=false) }}"
-    owner: root
-    group: root
-    mode: '0600'
-    backup: true
-  become: true
-  register: _netplan_write
+    - name: Write merged static netplan configuration
+      ansible.builtin.copy:
+        dest: "{{ _netplan_config_file }}"
+        content: "{{ _updated_netplan_doc | to_nice_yaml(indent=2, sort_keys=false) }}"
+        owner: root
+        group: root
+        mode: '0600'
+        backup: true
+      become: true
+      register: _netplan_write
 
-- name: Apply netplan
-  ansible.builtin.command:
-    cmd: netplan apply
-  become: true
-  changed_when: true
-  when: _netplan_write.changed
+    - name: Apply netplan
+      ansible.builtin.command:
+        cmd: netplan apply
+      become: true
+      changed_when: true
+      when: _netplan_write.changed
+
+- name: Convert DHCP NetworkManager interfaces to static
+  when: _static_network_backend == 'networkmanager'
+  block:
+    - name: Verify NetworkManager CLI is available
+      ansible.builtin.command:
+        cmd: nmcli --version
+      changed_when: false
+
+    - name: Read NetworkManager device status
+      ansible.builtin.command:
+        cmd: nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device status
+      changed_when: false
+      register: _nm_device_status
+
+    - name: Resolve connected ethernet NetworkManager devices
+      ansible.builtin.set_fact:
+        _nm_device_connections: "{{ _nm_device_connections | default({}) | combine({_nm_fields[0]: _nm_fields[3]}) }}"
+      vars:
+        _nm_fields: "{{ item.split(':') }}"
+      loop: "{{ _nm_device_status.stdout_lines }}"
+      when:
+        - _nm_fields | length >= 4
+        - _nm_fields[1] == 'ethernet'
+        - _nm_fields[2] == 'connected'
+
+    - name: Assert requested NetworkManager target interfaces are connected
+      ansible.builtin.assert:
+        that:
+          - item in (_nm_device_connections | default({}))
+        fail_msg: "Interface {{ item }} must be a connected NetworkManager ethernet device."
+      loop: "{{ _requested_target_interfaces }}"
+      when: _requested_target_interfaces | length > 0
+
+    - name: Resolve NetworkManager candidate interfaces
+      ansible.builtin.set_fact:
+        _nm_candidate_ifaces: >-
+          {{
+            _requested_target_interfaces
+            if _requested_target_interfaces | length > 0
+            else (_nm_device_connections | default({})).keys() | list
+          }}
+
+    - name: Read NetworkManager IPv4 methods
+      ansible.builtin.command:
+        argv:
+          - nmcli
+          - -g
+          - ipv4.method
+          - connection
+          - show
+          - "{{ _nm_device_connections[item] }}"
+      changed_when: false
+      register: _nm_ipv4_method_results
+      loop: "{{ _nm_candidate_ifaces }}"
+
+    - name: Resolve DHCP NetworkManager interfaces to convert
+      ansible.builtin.set_fact:
+        _dhcp_target_ifaces: >-
+          {{
+            _nm_ipv4_method_results.results
+            | selectattr('stdout', 'equalto', 'auto')
+            | map(attribute='item')
+            | list
+          }}
+
+    - name: Assert DHCP NetworkManager target interfaces are valid
+      ansible.builtin.assert:
+        that:
+          - _dhcp_target_ifaces | length > 0
+          - ansible_facts[item] is defined
+          - ansible_facts[item].ipv4 is defined
+        fail_msg: "Interface {{ item }} must use NetworkManager DHCP IPv4 method 'auto' and have a gathered IPv4 address."
+      loop: "{{ _dhcp_target_ifaces }}"
+
+    - name: Assert requested NetworkManager interfaces use DHCP
+      ansible.builtin.assert:
+        that:
+          - item in _dhcp_target_ifaces
+        fail_msg: "Requested interface {{ item }} must use NetworkManager DHCP IPv4 method 'auto'."
+      loop: "{{ _requested_target_interfaces }}"
+      when: _requested_target_interfaces | length > 0
+
+    - name: Disable cloud-init network management
+      ansible.builtin.copy:
+        dest: /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+        content: "network: {config: disabled}\n"
+        owner: root
+        group: root
+        mode: '0644'
+      become: true
+
+    - name: Persist static NetworkManager IPv4 settings
+      ansible.builtin.command:
+        argv:
+          - nmcli
+          - connection
+          - modify
+          - "{{ _nm_device_connections[item] }}"
+          - ipv4.method
+          - manual
+          - ipv4.addresses
+          - "{{ ansible_facts[item]['ipv4']['address'] }}/{{ ansible_facts[item]['ipv4']['prefix'] }}"
+          - ipv4.gateway
+          - "{{ ansible_facts.get('default_ipv4', {}).get('gateway', '') if item == ansible_facts.get('default_ipv4', {}).get('interface', '') else '' }}"
+          - ipv4.dns
+          - "{{ _static_nameservers | join(' ') }}"
+          - ipv4.ignore-auto-dns
+          - "yes"
+      become: true
+      changed_when: true
+      loop: "{{ _dhcp_target_ifaces }}"
+
+    - name: Apply NetworkManager static connections
+      ansible.builtin.command:
+        argv:
+          - nmcli
+          - connection
+          - up
+          - "{{ _nm_device_connections[item] }}"
+      become: true
+      changed_when: true
+      loop: "{{ _dhcp_target_ifaces }}"
+
+- name: Assert static network backend is supported
+  ansible.builtin.assert:
+    that:
+      - _static_network_backend in ['netplan', 'networkmanager']
+    fail_msg: "static_network_backend must be either 'netplan' or 'networkmanager'."

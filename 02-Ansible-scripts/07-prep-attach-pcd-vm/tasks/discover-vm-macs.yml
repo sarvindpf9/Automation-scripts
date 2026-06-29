@@ -1,0 +1,51 @@
+---
+- name: Read Proxmox VM configuration for generated NIC MACs
+  ansible.builtin.command:
+    argv:
+      - qm
+      - config
+      - "{{ item.value.vm_id | string }}"
+  register: proxmox_vm_config_results
+  changed_when: false
+  loop: "{{ resolved_vms | dict2items }}"
+  loop_control:
+    label: "{{ effective_vm_name }}"
+  vars:
+    effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
+
+- name: Build VM definitions with Proxmox-generated NIC MACs
+  ansible.builtin.set_fact:
+    resolved_vms_with_macs: "{{ _resolved_vms_with_macs_json | from_json }}"
+  vars:
+    _resolved_vms_with_macs_json: >-
+      {%- set ns = namespace(result={}) -%}
+      {%- for result in proxmox_vm_config_results.results -%}
+        {%- set vm_item = result.item -%}
+        {%- set vm = vm_item.value -%}
+        {%- set nic_ns = namespace(items=[]) -%}
+        {%- for nic in vm.network_interfaces -%}
+          {%- set nic_index = loop.index0 -%}
+          {%- set net_line = result.stdout_lines
+              | select('match', '^net' ~ nic_index ~ ':')
+              | list
+              | first
+              | default('', true) -%}
+          {%- set generated_mac = net_line
+              | regex_search('[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}')
+              | default('', true)
+              | lower -%}
+          {%- set nic_ns.items = nic_ns.items + [nic | combine({'proxmox_macaddr': generated_mac})] -%}
+        {%- endfor -%}
+        {%- set ns.result = ns.result | combine({vm_item.key: vm | combine({'network_interfaces': nic_ns.items})}) -%}
+      {%- endfor -%}
+      {{ ns.result | tojson }}
+
+- name: Validate discovered MAC addresses for every VM NIC
+  ansible.builtin.assert:
+    that:
+      - item.1.proxmox_macaddr is match('^[0-9a-f]{2}(:[0-9a-f]{2}){5}$')
+    fail_msg: "Could not discover a Proxmox-generated MAC address for {{ item.0.key }}."
+  loop: "{{ (resolved_vms_with_macs | dict2items) | subelements('value.network_interfaces') }}"
+  loop_control:
+    label: "{{ item.0.key }}"
+  when: not ansible_check_mode

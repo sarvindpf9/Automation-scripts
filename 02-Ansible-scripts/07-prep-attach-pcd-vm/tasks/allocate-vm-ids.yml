@@ -15,17 +15,27 @@
   ansible.builtin.set_fact:
     _cluster_vm_ids: "{{ _cluster_vm_info.proxmox_vms | map(attribute='vmid') | map('int') | list }}"
     _cluster_name_to_id: "{{ _cluster_vm_info.proxmox_vms | items2dict(key_name='name', value_name='vmid') }}"
+    _effective_template_vm_ids: "{{ _effective_template_vm_ids_json | from_json }}"
+  vars:
+    _effective_template_vm_ids_json: >-
+      {%- set ns = namespace(ids=[]) -%}
+      {%- for _key, vm in vms.items() -%}
+        {%- set template_id = vm.template_vm_id | default(template_vm_id) | int -%}
+        {%- set ns.ids = ns.ids + [template_id] -%}
+      {%- endfor -%}
+      {{ ns.ids | unique | list | tojson }}
 
 - name: Validate explicit vm_id values do not conflict
   ansible.builtin.assert:
     that:
-      - item.value.vm_id | int != template_vm_id | int
+      - item.value.vm_id | int not in _effective_template_vm_ids
       - >-
         item.value.vm_id | int not in _cluster_vm_ids
         or _cluster_name_to_id.get(effective_vm_name, none) == item.value.vm_id | int
     fail_msg: >-
       vm_id {{ item.value.vm_id }} for '{{ item.key }}' is already in use by a
-      different VM in the cluster, or equals template_vm_id {{ template_vm_id }}.
+      different VM in the cluster, or equals one of the effective template VMIDs
+      {{ _effective_template_vm_ids | join(', ') }}.
       Remove vm_id to auto-allocate, or choose an unused ID.
   loop: "{{ vms | dict2items }}"
   loop_control:
@@ -66,12 +76,20 @@
              | map(attribute='value.vm_id')
              | map('int')
              | list }}
-    _taken_base: "{{ ([template_vm_id | int] + _cluster_vm_ids + _explicit_ids) | unique | list }}"
+    _taken_base: "{{ (_effective_template_vm_ids + _cluster_vm_ids + _explicit_ids) | unique | list }}"
     _vms_json: >-
       {%- set ns = namespace(taken=_taken_base | list, result={}) -%}
       {%- for key, vm in vms.items() -%}
+        {%- set template_id = vm.template_vm_id | default(template_vm_id) | int -%}
+        {%- set template_name = vm.template_vm_name | default(template_vm_name) -%}
+        {%- set resolved_user = vm.cloud_init_user | default(cloud_init_user) -%}
+        {%- set resolved_vm = vm | combine({
+              'template_vm_id': template_id,
+              'template_vm_name': template_name,
+              'cloud_init_user': resolved_user
+            }) -%}
         {%- if vm.vm_id is defined -%}
-          {%- set ns.result = ns.result | combine({key: vm}) -%}
+          {%- set ns.result = ns.result | combine({key: resolved_vm}) -%}
         {%- else -%}
           {%- set eff = ([vm_name_prefix | default('', true) | trim, vm.vm_name] | reject('equalto', '') | join('-')) -%}
           {%- set ex_id = _cluster_name_to_id.get(eff, none) -%}
@@ -81,7 +99,7 @@
             {%- set fid = (range(vm_id_start | int, vm_id_end | int + 1) | list | difference(ns.taken) | sort | first) | int -%}
           {%- endif -%}
           {%- set ns.taken = ns.taken + [fid] -%}
-          {%- set ns.result = ns.result | combine({key: vm | combine({'vm_id': fid})}) -%}
+          {%- set ns.result = ns.result | combine({key: resolved_vm | combine({'vm_id': fid})}) -%}
         {%- endif -%}
       {%- endfor -%}
       {{ ns.result | tojson }}

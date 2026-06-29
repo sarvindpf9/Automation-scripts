@@ -10,8 +10,8 @@
     api_password: "{{ proxmox_api_password }}"
     validate_certs: "{{ proxmox_validate_certs }}"
     node: "{{ proxmox_node }}"
-    clone: "{{ template_vm_name }}"
-    vmid: "{{ template_vm_id }}"
+    clone: "{{ item.value.template_vm_name }}"
+    vmid: "{{ item.value.template_vm_id }}"
     newid: "{{ item.value.vm_id }}"
     name: "{{ effective_vm_name }}"
     storage: "{{ datastore_id }}"
@@ -28,7 +28,7 @@
   become: false
   no_log: true
 
-- name: Apply VM hardware and cloud-init configuration
+- name: Apply VM hardware and network configuration
   community.proxmox.proxmox_kvm:
     api_host: "{{ proxmox_api_host }}"
     api_port: "{{ proxmox_api_port }}"
@@ -48,8 +48,6 @@
     boot: "{{ boot_order }}"
     agent: "enabled={{ 1 if qemu_agent_enabled | bool else 0 }},fstrim_cloned_disks={{ 1 if qemu_agent_fstrim_cloned_disks | bool else 0 }},freeze-fs-on-backup={{ 1 if qemu_agent_freeze_fs_on_backup | bool else 0 }}"
     net: "{{ lookup('ansible.builtin.template', '../templates/proxmox-net.yml.j2') | from_yaml }}"
-    ide: "{{ {'ide2': cloudinit_drive_datastore_id + ':cloudinit,format=' + disk_format} if item.value.vm_id not in existing_vmids else omit }}"
-    cicustom: "user={{ snippet_datastore_id }}:snippets/{{ effective_vm_name | regex_replace('[^a-zA-Z0-9-]', '-') }}-user-data.yaml,network={{ snippet_datastore_id }}:snippets/{{ effective_vm_name | regex_replace('[^a-zA-Z0-9-]', '-') }}-network-data.yaml"
     update: true
     update_unsafe: true
     state: present
@@ -81,50 +79,6 @@
     label: "{{ effective_vm_name }}"
   vars:
     effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
-  delegate_to: localhost
-  become: false
-  no_log: true
-
-- name: Start VMs
-  community.proxmox.proxmox_kvm:
-    api_host: "{{ proxmox_api_host }}"
-    api_port: "{{ proxmox_api_port }}"
-    api_user: "{{ proxmox_api_user }}"
-    api_password: "{{ proxmox_api_password }}"
-    validate_certs: "{{ proxmox_validate_certs }}"
-    timeout: "{{ proxmox_api_timeout }}"
-    node: "{{ proxmox_node }}"
-    vmid: "{{ item.value.vm_id }}"
-    name: "{{ effective_vm_name }}"
-    state: started
-  loop: "{{ resolved_vms | dict2items }}"
-  loop_control:
-    label: "{{ effective_vm_name }}"
-  vars:
-    effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
-  when: start_vms | bool
-  delegate_to: localhost
-  become: false
-  no_log: true
-
-- name: Detach cloud-init drive after first boot
-  community.proxmox.proxmox_kvm:
-    api_host: "{{ proxmox_api_host }}"
-    api_port: "{{ proxmox_api_port }}"
-    api_user: "{{ proxmox_api_user }}"
-    api_password: "{{ proxmox_api_password }}"
-    validate_certs: "{{ proxmox_validate_certs }}"
-    timeout: "{{ proxmox_api_timeout }}"
-    node: "{{ proxmox_node }}"
-    vmid: "{{ item.value.vm_id }}"
-    name: "{{ effective_vm_name }}"
-    delete: ide2
-  loop: "{{ resolved_vms | dict2items }}"
-  loop_control:
-    label: "{{ effective_vm_name }}"
-  vars:
-    effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
-  when: (detach_cloudinit_drive | bool) and (item.value.vm_id not in existing_vmids)
   delegate_to: localhost
   become: false
   no_log: true

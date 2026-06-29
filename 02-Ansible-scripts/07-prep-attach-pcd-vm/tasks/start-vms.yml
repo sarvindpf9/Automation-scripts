@@ -1,0 +1,44 @@
+---
+- name: Start VMs
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_password: "{{ proxmox_api_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    timeout: "{{ proxmox_api_timeout }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ item.value.vm_id }}"
+    name: "{{ effective_vm_name }}"
+    state: started
+  loop: "{{ resolved_vms_with_macs | dict2items }}"
+  loop_control:
+    label: "{{ effective_vm_name }}"
+  vars:
+    effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
+  when: start_vms | bool
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Detach cloud-init drive after first boot
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_password: "{{ proxmox_api_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    timeout: "{{ proxmox_api_timeout }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ item.value.vm_id }}"
+    name: "{{ effective_vm_name }}"
+    delete: ide2
+  loop: "{{ resolved_vms_with_macs | dict2items }}"
+  loop_control:
+    label: "{{ effective_vm_name }}"
+  vars:
+    effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
+  when: (detach_cloudinit_drive | bool) and (item.value.vm_id not in existing_vmids)
+  delegate_to: localhost
+  become: false
+  no_log: true

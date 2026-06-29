@@ -2,7 +2,7 @@ version: 2
 ethernets:
 {% for nic in vm_config.network_interfaces %}
 {% set nic_index = loop.index0 %}
-{% set nic_macaddr = nic.macaddr | default('', true) %}
+{% set nic_macaddr = nic.proxmox_macaddr | default('', true) %}
   eth{{ nic_index }}:
 {% if nic_macaddr | length > 0 %}
     match:

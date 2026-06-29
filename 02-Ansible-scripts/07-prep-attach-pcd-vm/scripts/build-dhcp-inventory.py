@@ -215,7 +215,7 @@ def effective_vm_name(vm_config: dict[str, Any], vm_key: str, prefix: Any) -> st
 
 def write_inventory(
     output_path: Path,
-    hosts: dict[str, str],
+    hosts: dict[str, dict[str, str]],
     ssh_user: str,
     ssh_private_key: str,
 ) -> None:
@@ -231,12 +231,14 @@ def write_inventory(
         "      hosts:",
     ]
 
-    for vm_name, ip_value in sorted(hosts.items()):
+    for vm_name, host_config in sorted(hosts.items()):
+        ip_value = host_config["ansible_host"]
+        vm_ssh_user = host_config.get("ansible_user", ssh_user)
         lines.extend(
             [
                 f"        {yaml_scalar(vm_name)}:",
                 f"          ansible_host: {yaml_scalar(ip_value)}",
-                f"          ansible_user: {yaml_scalar(ssh_user)}",
+                f"          ansible_user: {yaml_scalar(vm_ssh_user)}",
                 f"          ansible_ssh_private_key_file: {yaml_scalar(ssh_private_key)}",
                 '          ansible_python_interpreter: "/usr/bin/python3"',
             ]
@@ -290,14 +292,17 @@ def main() -> int:
     )
     client.authenticate()
 
-    hosts: dict[str, str] = {}
+    hosts: dict[str, dict[str, str]] = {}
     deadline = time.monotonic() + args.max_wait
 
     for vm_key, vm_config in vms.items():
         vm_name = effective_vm_name(vm_config, vm_key, vm_name_prefix)
         static_ip = primary_static_ip(vm_config)
         if static_ip:
-            hosts[vm_name] = static_ip
+            hosts[vm_name] = {
+                "ansible_host": static_ip,
+                "ansible_user": str(vm_config.get("cloud_init_user", args.ssh_user)),
+            }
 
     for vm_key, vm_config in dhcp_vms.items():
         vm_name = effective_vm_name(vm_config, vm_key, vm_name_prefix)
@@ -332,7 +337,10 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
-        hosts[vm_name] = ip_value
+        hosts[vm_name] = {
+            "ansible_host": ip_value,
+            "ansible_user": str(vm_config.get("cloud_init_user", args.ssh_user)),
+        }
 
     write_inventory(
         output_path=Path(args.output).expanduser(),

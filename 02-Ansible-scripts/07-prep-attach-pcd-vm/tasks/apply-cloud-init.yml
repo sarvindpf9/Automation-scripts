@@ -1,0 +1,25 @@
+---
+- name: Apply cloud-init snippets to VMs
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_password: "{{ proxmox_api_password }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    timeout: "{{ proxmox_api_timeout }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ item.value.vm_id }}"
+    name: "{{ effective_vm_name }}"
+    ide: "{{ {'ide2': cloudinit_drive_datastore_id + ':cloudinit,format=' + disk_format} if item.value.vm_id not in existing_vmids else omit }}"
+    cicustom: "user={{ snippet_datastore_id }}:snippets/{{ effective_vm_name | regex_replace('[^a-zA-Z0-9-]', '-') }}-user-data.yaml,network={{ snippet_datastore_id }}:snippets/{{ effective_vm_name | regex_replace('[^a-zA-Z0-9-]', '-') }}-network-data.yaml"
+    update: true
+    update_unsafe: true
+    state: present
+  loop: "{{ resolved_vms_with_macs | dict2items }}"
+  loop_control:
+    label: "{{ effective_vm_name }}"
+  vars:
+    effective_vm_name: "{{ ([vm_name_prefix | default('', true) | trim, item.value.vm_name] | reject('equalto', '') | join('-')) }}"
+  delegate_to: localhost
+  become: false
+  no_log: true

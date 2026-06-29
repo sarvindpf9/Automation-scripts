@@ -1,12 +1,14 @@
 ---
-# Convert DHCP-assigned netplan interfaces to static entries.
+# Convert DHCP-assigned guest interfaces to static entries.
+# Ubuntu-style guests use netplan. Rocky/AlmaLinux guests use NetworkManager.
 #
 # Required: run against the VM guest, not the Proxmox node.
 #
 # Variables (all optional):
 #   target_interface    - single DHCP NIC to convert; defaults to all dhcp4: true ethernets
 #   target_interfaces   - list of DHCP NICs to convert; defaults to all dhcp4: true ethernets
-#   netplan_config_file - netplan file to update; defaults to /etc/netplan/50-cloud-init.yaml
+#   static_network_backend - netplan or networkmanager; defaults from guest OS
+#   netplan_config_file    - netplan file to update; defaults to /etc/netplan/50-cloud-init.yaml
 #
 # Usage:
 #   # Single VM by IP (inline inventory):
@@ -33,7 +35,7 @@
 #     -u ubuntu --private-key ~/.ssh/id_rsa \
 #     -e netplan_config_file=/etc/netplan/99-static.yaml
 
-- name: Convert DHCP interface to static via netplan
+- name: Convert DHCP interface to static
   hosts: "{{ target_hosts | default('all') }}"
   gather_facts: true
   become: false

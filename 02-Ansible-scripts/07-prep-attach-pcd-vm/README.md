@@ -93,15 +93,11 @@ source .venv/bin/activate
 
 ### Filling in group_vars/all.yml
 
-Every `<PLACEHOLDER>` in `group_vars/all.yml` must be replaced with a real value before running any playbook. The preflight task asserts that `template_vm_id` and every per-VM `vm_id` are bare integers — leaving them as placeholder strings causes the first assertion to fail with:
-
-```text
-"assertion": "template_vm_id is number"
-```
+Every required `<PLACEHOLDER>` in `group_vars/all.yml` must be replaced with a real value before running any playbook. The preflight task asserts that each VM's effective `template_vm_id` and every per-VM `vm_id` are bare integers — leaving the global template placeholder in place is valid only when every VM overrides `template_vm_id`.
 
 **Required types:**
 
-- `template_vm_id`, `vm_id` — bare integer, no quotes (e.g. `9000`, not `"9000"` or `<TEMPLATE_VM_ID>`)
+- `template_vm_id`, `vm_id` — bare integer, no quotes (e.g. `9000`, not `"9000"` or `<TEMPLATE_VM_ID>`). `template_vm_id` can be global or set per VM.
 - `ip` fields — CIDR notation (e.g. `192.168.10.50/24`)
 - `proxmox_api_user` — must include realm suffix (e.g. `root@pam` or `ansible@pve`)
 
@@ -354,7 +350,7 @@ The following are site-wide settings that rarely change between runs. They must 
 | `proxmox_api_user` | Fixed per operator/service account |
 | `proxmox_api_password` | Site credential — use Vault |
 | `proxmox_node` | Target node, fixed per environment |
-| `template_vm_id` / `template_vm_name` | Source template, fixed per site |
+| `template_vm_id` / `template_vm_name` | Default source template, fixed per site unless overridden per VM |
 | `datastore_id` / `cloudinit_drive_datastore_id` | Storage layout, fixed per site |
 | `snippet_datastore_id` / `snippet_directory` | Snippet path, fixed per node |
 
@@ -382,7 +378,7 @@ The same applies to any other dict variable you override.
 
 ### Example: minimal extra-vars file
 
-This file overrides `vms`, `ssh_public_key_path`, and `cloud_init_user`. All Proxmox connection settings, node, template, and storage values are read from `group_vars/all.yml`.
+This file overrides `vms`, `ssh_public_key_path`, and `cloud_init_user`. All Proxmox connection settings, node, default template, and storage values are read from `group_vars/all.yml`.
 
 ```yaml
 # my-vms.yml
@@ -487,8 +483,8 @@ Runs against guest VMs (not the Proxmox node) to convert a DHCP-assigned interfa
 | `proxmox_api_password` | Yes | API password; use Vault or runtime extra-vars |
 | `proxmox_validate_certs` | No | TLS verification toggle |
 | `proxmox_node` | Yes | Target Proxmox node name as shown in the UI |
-| `template_vm_id` | Yes | Source template VMID — **must be a bare integer**, e.g. `9000` |
-| `template_vm_name` | Yes | Source template VM name |
+| `template_vm_id` | Yes | Default source template VMID — **must be a bare integer**, e.g. `9000`; can be overridden per VM |
+| `template_vm_name` | Yes | Default source template VM name; can be overridden per VM |
 | `datastore_id` | Yes | Target datastore for the cloned VM disk |
 | `cloudinit_drive_datastore_id` | Yes | Datastore for the temporary cloud-init drive |
 | `snippet_datastore_id` | Yes | Datastore ID used in Proxmox `cicustom` paths |
@@ -509,7 +505,7 @@ Runs against guest VMs (not the Proxmox node) to convert a DHCP-assigned interfa
 | `qemu_agent_freeze_fs_on_backup` | No | Freeze/thaw guest filesystems for consistent snapshots; default `true`, takes effect only when `qemu_agent_enabled: true` |
 | `generated_guest_inventory_enabled` | No | Build `generated_guest_inventory_path` after VM creation; default `true` |
 | `generated_guest_inventory_path` | No | Generated guest inventory path relative to this directory, default `generated/vm-inventory.yml` |
-| `generated_guest_inventory_user` | No | SSH user written into the generated guest inventory, default `ubuntu` |
+| `generated_guest_inventory_user` | No | Fallback SSH user written into the generated guest inventory, default `ubuntu`; per-VM `cloud_init_user` takes precedence |
 | `generated_guest_inventory_ssh_private_key_path` | No | Local private key path written into the generated guest inventory. Leave empty to derive it from `ssh_public_key_path` by removing `.pub`. |
 | `guest_agent_inventory_initial_delay_seconds` | No | Delay before QGA polling starts for DHCP VMs, default `90` |
 | `guest_agent_inventory_max_wait_seconds` | No | Maximum QGA polling window for DHCP IP discovery, default `900` |
@@ -520,10 +516,11 @@ Runs against guest VMs (not the Proxmox node) to convert a DHCP-assigned interfa
 The `vms` map in `group_vars/all.yml` controls VM settings and network layout.
 
 - Each VM entry requires `vm_name`, `vm_id` (integer), `memory_mb`, `cores`, `sockets`, `disk_size_gb`, and `network_interfaces`.
+- `template_vm_id`, `template_vm_name`, and `cloud_init_user` can be set per VM to deploy different OS templates in one run. When omitted, the global values are used, preserving the existing single-template workflow.
 - `vm_name_prefix` is prepended to every VM name when set. For example, `vm_name_prefix: jp1` and `vm_name: web-01` creates `jp1-web-01`; an empty prefix preserves `web-01`.
 - `network_interfaces` are rendered in order as `net0`, `net1`, etc.
 - Proxmox may auto-assign NIC MACs. On first boot, the cloud-init user-data script reads the actual virtio NIC order, guest interface names, and learned MAC addresses, then rewrites `/etc/netplan/50-cloud-init.yaml` so placeholder `eth0`, `eth1`, etc. become the real guest names such as `ens18`, `ens19`.
-- Set `macaddr` on a NIC only when you need to preserve or supply a specific MAC address. When set, the same MAC is written into both Proxmox NIC config and the rendered netplan.
+- Do not set `macaddr` on NICs. The playbook lets Proxmox assign NIC MACs, discovers them after VM NIC creation, and writes them into the rendered cloud-init network data. In Ansible check mode, those MACs may not exist yet, so network-data is rendered without a MAC matcher for dry-run visibility.
 - `vlan_id` on a network interface is applied as the Proxmox NIC VLAN tag.
 - Set `dhcp4: true` on an interface to obtain an address via DHCP; omit `ip`, `gw`, and `dns` when doing so.
 - VLAN subinterfaces under `vlan_devices:` are rendered inside the guest on top of the parent interface.
@@ -623,7 +620,7 @@ ansible-playbook playbooks/create-vms.yml -e @my-vms.yml
 
 ### Launch example: single NIC
 
-One VM with a single Proxmox NIC on `vmbr0`, tagged with VLAN 100, and a static IP configured via cloud-init. The example file overrides only the `vms` map — Proxmox connection settings and `template_vm_id` must still be filled in `group_vars/all.yml`.
+One VM with a single Proxmox NIC on `vmbr0`, tagged with VLAN 100, and a static IP configured via cloud-init. The example file overrides only the `vms` map — Proxmox connection settings and a template source must still be provided either globally in `group_vars/all.yml` or per VM.
 
 ```yaml
 ssh_public_key_path: ~/.ssh/id_rsa.pub
@@ -900,7 +897,7 @@ The preflight task (`tasks/preflight.yml`) validates all variables before any Pr
 
 | Check | Applies to |
 | ---- | ---- |
-| `template_vm_id` is a bare integer | create |
+| Effective `template_vm_id` is a bare integer | create |
 | Each `vm_id` is an integer in range 100–999999 | create |
 | Duplicate VM name or VM ID | create + delete |
 | Duplicate interface IP | create + delete |

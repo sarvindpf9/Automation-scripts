@@ -6,8 +6,6 @@
       - proxmox_api_user | length > 0
       - proxmox_api_password | length > 0
       - proxmox_node | length > 0
-      - template_vm_id is number
-      - template_vm_name | length > 0
       - datastore_id | length > 0
       - cloudinit_drive_datastore_id | length > 0
       - snippet_datastore_id | length > 0
@@ -21,6 +19,9 @@
   ansible.builtin.assert:
     that:
       - item.value.vm_name | length > 0
+      - (item.value.template_vm_id | default(template_vm_id)) is number
+      - (item.value.template_vm_name | default(template_vm_name)) | length > 0
+      - (item.value.cloud_init_user | default(cloud_init_user)) | length > 0
       # vm_id is optional — validated here only when explicitly set.
       # Auto-allocation and cluster-wide uniqueness are enforced in allocate-vm-ids.yml.
       - item.value.vm_id is not defined or (item.value.vm_id is number and item.value.vm_id | int >= 100 and item.value.vm_id | int <= 999999)
@@ -32,10 +33,22 @@
       - item.value.sockets >= 1
       - item.value.network_interfaces is sequence
       - item.value.network_interfaces | length > 0
-    fail_msg: "Each VM must define vm_name, memory_mb, cores, sockets, and network_interfaces. vm_id is optional (auto-allocated if omitted, must be 100–999999 if set)."
+    fail_msg: "Each VM must define vm_name, template source via per-VM or global template variables, memory_mb, cores, sockets, and network_interfaces. vm_id is optional (auto-allocated if omitted, must be 100–999999 if set)."
   loop: "{{ vms | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
+
+- name: Validate NIC definitions
+  ansible.builtin.assert:
+    that:
+      - item.1.bridge is defined
+      - item.1.bridge | default('', true) | length > 0
+      - item.1.macaddr is not defined
+      - item.1.vlani_id is not defined
+    fail_msg: "Each NIC must define bridge, must not define macaddr, and must use vlan_id (not vlani_id) for a Proxmox VLAN tag. MAC addresses are discovered from Proxmox after VM NIC creation."
+  loop: "{{ (vms | dict2items) | subelements('value.network_interfaces') }}"
+  loop_control:
+    label: "{{ item.0.key }}"
 
 - name: Build list of declared VM IP addresses
   ansible.builtin.set_fact:
