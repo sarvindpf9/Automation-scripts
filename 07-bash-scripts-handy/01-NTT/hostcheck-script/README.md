@@ -6,7 +6,7 @@ Host health-check script for OpenStack KVM compute nodes. Validates storage, net
 
 ## `hostInfo-check.sh`
 
-Runs a comprehensive set of read-only health checks on the local host — bond interfaces, NTP, packages, iSCSI, multipath, LVM, PF9 packages, PF9 services, OVS bridges, and `/etc/hosts`. No IP input is required. Optionally adds a passwordless-sudo audit and a virsh VM disk/multipath inspection.
+Runs a comprehensive set of read-only health checks on the local host — bond interfaces, NTP, packages, iSCSI, multipath, LVM, PF9 packages and services, OVS bridges, `/etc/hosts`, group database consistency, PF9 rsyslog rules, and the PF9 user/group. No IP input is required. Optionally adds a passwordless-sudo audit and virsh VM disk/multipath inspections.
 
 **Dependencies (local):**
 
@@ -15,8 +15,11 @@ Runs a comprehensive set of read-only health checks on the local host — bond i
 - `systemctl` — service status (read-only)
 - `iscsiadm` — iSCSI session listing (read-only, `iscsid` must be installed)
 - `multipath` — `multipath -ll` listing (read-only)
-- `ovs-vsctl` — OVS bridge enumeration (gracefully skipped if absent)
-- `virsh` — VM liveness check (section 15, unconditional); per-VM disk/path listing (section 14, `list-vm-mpath`); UUID resolution and block device mapping (section 16, `--uuid`); gracefully skipped for sections 14 and 15 if absent
+- `ovs-vsctl` — OVS bridge enumeration; reports failure if absent
+- `virsh` — VM liveness check (section 15, unconditional); per-VM disk/path listing (section 14, `list-vm-mpath`); UUID resolution and block device mapping (section 16, `--uuid`); reports failure if absent
+- `grpck` — read-only group database consistency validation
+- `getent` — PF9 user and group lookup
+- `grep` — searches `/etc/rsyslog.d` for required PF9 log destinations
 
 **Dependencies (hypervisor / remote host):**
 
@@ -26,7 +29,7 @@ Runs a comprehensive set of read-only health checks on the local host — bond i
 **What it does:**
 
 1. Parses optional flags; errors on any unrecognised argument
-2. Runs all host checks and virsh liveness unconditionally (sections 2–12 and 15; note the script labels both OVS bridges and /etc/hosts as section 12)
+2. Runs the core host checks, virsh liveness, group consistency, PF9 rsyslog rule, and PF9 account checks unconditionally (sections 2–12, 15, and 17–19; note the script labels both OVS bridges and `/etc/hosts` as section 12)
 3. If `check-sudoers` is passed, also runs the passwordless sudo audit (section 1)
 4. If `check-mpath-orphan` is passed, scans for orphaned or faulty multipath devices (section 13)
 5. If `list-vm-mpath` is passed, lists per-VM DM disks and multipath path state (section 14)
@@ -86,17 +89,31 @@ All sections below run on every invocation unless noted.
 | 4 | **Packages** | `dpkg -l` presence check for: `lsscsi`, `sg3-utils`, `multipath-tools`, `scsitools`, `open-iscsi`, `nfs-common` |
 | 5 | **Services** | `systemctl is-active` for: `iscsid`, `multipathd` |
 | 6 | **iSCSI initiator** | Reads `/etc/iscsi/initiatorname.iscsi`; lists active sessions via `iscsiadm -m session` |
-| 7 | **iscsid.conf** | Validates five timeout parameters in `/etc/iscsi/iscsid.conf` against expected values; skipped silently if `iscsid` is not installed |
+| 7 | **iscsid.conf** | Validates five timeout parameters in `/etc/iscsi/iscsid.conf` against expected values; reports a warning and skips the check if `iscsid` is not installed |
 | 8 | **Multipath blacklist** | Parses `/etc/multipath.conf` — checks `defaults{}` (4 keys), `blacklist{}` entries, and the NETAPP `device{}` block (9 parameters); prints full file content at end of section |
 | 9 | **LVM filters** | Checks `/etc/lvm/lvm.conf` for `filter` and `global_filter` stanzas |
 | 10 | **PF9 packages** | `dpkg -l` presence check for 16 PF9/OVN packages: `openvswitch-common`, `openvswitch-switch`, `ovn-common`, `ovn-host`, `pf9-cindervolume-base`, `pf9-cindervolume-config`, `pf9-comms`, `pf9-glance-role`, `pf9-ha-slave`, `pf9-hostagent`, `pf9-ip-discovery`, `pf9-neutron-base`, `pf9-neutron-ovn-controller`, `pf9-neutron-ovn-metadata-agent`, `pf9-ostackhost`, `python3-openvswitch` |
-| 11 | **PF9 services** | `systemctl` status for 13 PF9 services; if `pf9-ha-slave` is absent, additionally reports `pf9-remote-write` status; if `pf9-ostackhost` is running, checks `volume_use_multipath` and `iscsi_use_multipath` in `nova_override.conf`, prints the full file, then prints virsh/XML VM count and any UUID mismatches; if `pf9-cindervolume-base` is running, checks `reserved_percentage` and `goodness_function` in `cinder.conf` |
+| 11 | **PF9 services** | `systemctl` status for 13 PF9 services; if `pf9-ha-slave` is absent, additionally reports `pf9-remote-write` status; if `pf9-ostackhost` is running, checks `volume_use_multipath` and `iscsi_use_multipath` in `nova_override.conf`, prints the full file, then prints virsh/XML VM count and any UUID mismatches; if `pf9-cindervolume-base` is running, checks `reserved_percentage` and `goodness_function` in `cinder.conf`, then checks and prints `cinder_override.conf` |
 | 12 | **OVS bridges** | Lists all OVS bridges, their IPv4 addresses, and physical uplink ports (skips `patch`/`internal` types; lists all ports for `br-int`) |
 | 12 | **`/etc/hosts`** *(also labeled 12 in script)* | Prints a red advisory to review SVM FQDN/IP mappings, then prints full `/etc/hosts` contents |
 | 13 | **Multipath orphans** *(check-mpath-orphan flag only)* | Builds a map of all `dm-*` devices referenced by VM XMLs in `/etc/libvirt/qemu/`; any multipath device not in that map is flagged as an orphan (leftover from a deleted/detached VM); additionally scans every device stanza for `failed`/`faulty` path lines and reports `[ FAIL ]` regardless of VM association |
 | 14 | **VM disk multipath** *(list-vm-mpath flag only)* | For each running VM, retrieves its UUID and DM-* block devices (via `virsh domblklist`, with XML fallback); pre-parses `multipath -ll` once into per-`dm-X` maps and classifies each device as `active` (all paths up), `degraded` (some paths up), or `dead` (no active paths) |
 | 15 | **Virsh liveness** | Runs `virsh list --all` with a 10 s timeout; on timeout or error, scans for defunct/zombie qemu processes, resolves their VM UUID via cmdline or `/var/run/libvirt/qemu/*.pid` files, then prints the full `multipath -ll` stanza for each DM disk belonging to the zombie VM |
 | 16 | **Virsh VM** *(`--uuid` flag only)* | Resolves UUID to domain name; lists block devices via `virsh domblklist --details`; maps `dm-*` devices to `/dev/mapper/<name>` via `multipath -ll` |
+| 17 | **Group consistency** | Runs `grpck -r` to validate the group database without modifying it; reports command output when validation fails |
+| 18 | **PF9 rsyslog rules** | Recursively searches `/etc/rsyslog.d` and reports whether rules reference each required PF9 log destination |
+| 19 | **PF9 user and group** | Uses `getent` to verify that the `pf9` user and `pf9group` group exist and prints their account database entries |
+
+### PF9 rsyslog destinations
+
+Section 18 verifies that at least one file under `/etc/rsyslog.d` references each of these paths:
+
+- `/var/log/pf9/ostackhost.log`
+- `/var/log/pf9/cindervolume-base.log`
+- `/var/log/pf9/hostagent.log`
+- `/var/log/pf9/glance-api.log`
+- `/var/log/pf9/novncproxy.log`
+- `/var/log/pf9/pf9-neutron-ovn-metadata-agent.log`
 
 ### PF9 service config checks
 
@@ -117,6 +134,8 @@ Full file contents are printed after the parameter checks.
 | --------- | ----- |
 | `reserved_percentage` | Presence check — WARN if not set |
 | `goodness_function` | Presence check — WARN if not set |
+
+The script then checks `/opt/pf9/etc/pf9-cindervolume-base/conf.d/cinder_override.conf`. If the file is readable, it reports success and prints the full contents; otherwise, it reports a warning with the expected path.
 
 ---
 
@@ -388,4 +407,5 @@ sudo ./hostInfo-check.sh check-sudoers check-mpath-orphan list-vm-mpath --uuid 4
 
 - **OS:** Debian/Ubuntu (uses `dpkg`, `systemctl`, `timedatectl`)
 - **Privileges:** Requires `root` or a user with access to `virsh`, `multipath`, `iscsiadm`, and `ovs-vsctl`
-- **Conditional tools:** `virsh` (section 15 runs unconditionally but skips gracefully if absent; sections 14 and 16 require it for `list-vm-mpath` and `--uuid` respectively); `ovs-vsctl` (OVS check skipped gracefully if absent); `iscsid` (section 7 skipped if not installed)
+- **Required host tools:** `grpck`, `getent`, and `grep` are used by the unconditional checks in sections 17–19
+- **Conditional tools:** `virsh` (section 15 runs unconditionally but reports failure if absent; sections 14 and 16 require it for `list-vm-mpath` and `--uuid` respectively); `ovs-vsctl` (section 12 reports failure if absent); `iscsid` (section 7 reports a warning and skips if not installed)

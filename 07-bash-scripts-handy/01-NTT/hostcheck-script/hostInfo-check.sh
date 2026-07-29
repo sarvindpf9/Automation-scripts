@@ -517,6 +517,17 @@ check_pf9_services() {
         else
             WARN "cinder.conf not found or not readable: $cinder_conf"
         fi
+
+        local cinder_override_conf="/opt/pf9/etc/pf9-cindervolume-base/conf.d/cinder_override.conf"
+        printf "\n  %b[ cinder_override.conf ]%b\n" "$CYAN" "$NC"
+        if [[ -r "$cinder_override_conf" ]]; then
+            OK "cinder_override.conf found and readable"
+            INFO ""
+            INFO "── $cinder_override_conf ──"
+            while IFS= read -r line; do INFO "$line"; done < "$cinder_override_conf"
+        else
+            WARN "cinder_override.conf not found or not readable: $cinder_override_conf"
+        fi
     fi
 }
 
