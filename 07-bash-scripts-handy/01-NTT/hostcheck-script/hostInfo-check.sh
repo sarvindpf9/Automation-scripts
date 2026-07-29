@@ -350,6 +350,78 @@ check_hosts() {
     while IFS= read -r line; do INFO "$line"; done < /etc/hosts
 }
 
+check_group_consistency() {
+    if ! command -v grpck >/dev/null 2>&1; then
+        FAIL "grpck command not available"
+        return
+    fi
+
+    local grpck_output
+    if grpck_output=$(grpck -r 2>&1); then
+        OK "Group database consistency check passed"
+    else
+        FAIL "Group database consistency check failed"
+        while IFS= read -r line; do
+            INFO "$line"
+        done <<< "$grpck_output"
+    fi
+}
+
+check_rsyslog_pf9_rules() {
+    local rsyslog_dir="/etc/rsyslog.d"
+    local log_paths=(
+        "/var/log/pf9/ostackhost.log"
+        "/var/log/pf9/cindervolume-base.log"
+        "/var/log/pf9/hostagent.log"
+        "/var/log/pf9/glance-api.log"
+        "/var/log/pf9/novncproxy.log"
+        "/var/log/pf9/pf9-neutron-ovn-metadata-agent.log"
+    )
+
+    if [[ ! -d "$rsyslog_dir" ]]; then
+        FAIL "$rsyslog_dir directory not found"
+        return
+    fi
+
+    local log_path
+    for log_path in "${log_paths[@]}"; do
+        local matching_files=()
+        mapfile -t matching_files < <(
+            grep -rlF -- "$log_path" "$rsyslog_dir" 2>/dev/null || true
+        )
+
+        if [[ ${#matching_files[@]} -gt 0 ]]; then
+            OK "$log_path found in:"
+            local rule_file
+            for rule_file in "${matching_files[@]}"; do
+                INFO "$rule_file"
+            done
+        else
+            FAIL "$log_path not found in any file under $rsyslog_dir"
+        fi
+    done
+}
+
+check_pf9_user_group() {
+    local user_name="pf9"
+    local group_name="pf9group"
+    local passwd_entry group_entry
+
+    passwd_entry=$(getent passwd "$user_name" 2>/dev/null || true)
+    if [[ -n "$passwd_entry" ]]; then
+        OK "$passwd_entry"
+    else
+        FAIL "User $user_name not found"
+    fi
+
+    group_entry=$(getent group "$group_name" 2>/dev/null || true)
+    if [[ -n "$group_entry" ]]; then
+        OK "$group_entry"
+    else
+        FAIL "Group $group_name not found"
+    fi
+}
+
 check_pf9_packages() {
     local PACKAGES="openvswitch-common openvswitch-switch ovn-common ovn-host pf9-cindervolume-base pf9-cindervolume-config pf9-comms pf9-glance-role pf9-ha-slave pf9-hostagent pf9-ip-discovery pf9-neutron-base pf9-neutron-ovn-controller pf9-neutron-ovn-metadata-agent pf9-ostackhost python3-openvswitch"
     for pkg in $PACKAGES; do
@@ -911,6 +983,9 @@ health_check "12. /ETC/HOSTS"              check_hosts
 [[ "$CHECK_MPATH_ORPHAN" == true ]] && health_check "13. MULTIPATH ORPHANS"  check_multipath_orphans
 [[ "$LIST_VM_MPATH"      == true ]] && health_check "14. VM DISK MULTIPATH"   check_vm_disk_multipath
 health_check "15. VIRSH LIVENESS"          check_virsh_responsiveness
+health_check "17. GROUP CONSISTENCY"       check_group_consistency
+health_check "18. RSYSLOG PF9 RULES"        check_rsyslog_pf9_rules
+health_check "19. PF9 USER AND GROUP"       check_pf9_user_group
 
 if [[ -n "$VIRSH_UUID" ]]; then
     health_check "16. VIRSH VMS"           check_virsh_vms "$VIRSH_UUID"
