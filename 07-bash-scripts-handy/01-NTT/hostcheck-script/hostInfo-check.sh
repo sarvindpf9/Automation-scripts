@@ -243,20 +243,12 @@ check_multipath_blacklist() {
     if [[ -z "$defaults_block" ]]; then
         FAIL "defaults{} section missing"
     else
-        local -A defaults_want=(
-            [find_multipaths]="yes"
-            [no_path_retry]="12"
-            [polling_interval]="5"
-            [user_friendly_names]="no"
-        )
-        for key in find_multipaths no_path_retry polling_interval user_friendly_names; do
-            local want="${defaults_want[$key]}" got
-            got=$(printf '%s\n' "$defaults_block" | awk -v k="$key" '$1==k{print $2; exit}')
-            if   [[ "$got" == "$want" ]]; then OK   "defaults: $key = $got"
-            elif [[ -n "$got" ]];         then WARN "defaults: $key = $got  (expected: $want)"
-            else                               FAIL "defaults: $key missing  (expected: $want)"
-            fi
-        done
+        local key="checker_timeout" want="15" got
+        got=$(printf '%s\n' "$defaults_block" | awk -v k="$key" '$1==k{print $2; exit}')
+        if   [[ "$got" == "$want" ]]; then OK   "defaults: $key = $got"
+        elif [[ -n "$got" ]];         then WARN "defaults: $key = $got  (expected: $want)"
+        else                               FAIL "defaults: $key missing  (expected: $want)"
+        fi
     fi
 
     # ── blacklist section ──────────────────────────────────────────────────────
@@ -466,18 +458,12 @@ check_pf9_services() {
         local nova_conf="/opt/pf9/etc/nova/conf.d/nova_override.conf"
         printf "\n  %b[ nova_override.conf ]%b\n" "$CYAN" "$NC"
         if [[ -r "$nova_conf" ]]; then
-            local vol_mp iscsi_mp
+            local vol_mp
             vol_mp=$(grep -E '^\s*volume_use_multipath\s*=' "$nova_conf" 2>/dev/null || true)
             if [[ -n "$vol_mp" ]]; then
                 OK "volume_use_multipath: $vol_mp"
             else
                 WARN "volume_use_multipath not set in nova_override.conf"
-            fi
-            iscsi_mp=$(grep -E '^\s*iscsi_use_multipath\s*=' "$nova_conf" 2>/dev/null || true)
-            if [[ -n "$iscsi_mp" ]]; then
-                OK "iscsi_use_multipath: $iscsi_mp"
-            else
-                WARN "iscsi_use_multipath not set in nova_override.conf"
             fi
             INFO ""
             INFO "── $nova_conf ──"
@@ -489,7 +475,7 @@ check_pf9_services() {
         local xml_uuids virsh_names only_xml only_virsh xml_count virsh_count
         xml_uuids=$(find /etc/libvirt/qemu/ -maxdepth 1 -name '*.xml' -exec basename {} .xml \; 2>/dev/null | sort)
         virsh_names=$(virsh list --all --name 2>/dev/null | grep -v '^$' | sort)
-
+̧
         only_xml=$(comm -23 <(echo "$xml_uuids") <(echo "$virsh_names"))
         only_virsh=$(comm -13 <(echo "$xml_uuids") <(echo "$virsh_names"))
 
@@ -502,22 +488,6 @@ check_pf9_services() {
     fi
 
     if [[ "$cindervolume_running" == true ]]; then
-        local cinder_conf="/opt/pf9/etc/pf9-cindervolume-base/conf.d/cinder.conf"
-        printf "\n  %b[ cinder.conf ]%b\n" "$CYAN" "$NC"
-        if [[ -r "$cinder_conf" ]]; then
-            for param in reserved_percentage goodness_function; do
-                local val
-                val=$(grep -E "^\s*${param}\s*=" "$cinder_conf" 2>/dev/null || true)
-                if [[ -n "$val" ]]; then
-                    OK "$val"
-                else
-                    WARN "$param not set in cinder.conf"
-                fi
-            done
-        else
-            WARN "cinder.conf not found or not readable: $cinder_conf"
-        fi
-
         local cinder_override_conf="/opt/pf9/etc/pf9-cindervolume-base/conf.d/cinder_override.conf"
         printf "\n  %b[ cinder_override.conf ]%b\n" "$CYAN" "$NC"
         if [[ -r "$cinder_override_conf" ]]; then
