@@ -2,20 +2,31 @@
 set -Eeuo pipefail
 
 usage() {
-    echo "Usage: $0 IMAGE_FILE IMAGE_NAME [DISK_FORMAT]" >&2
+    echo "Usage: $0 IMAGE_FILE IMAGE_NAME [DISK_FORMAT] [IMAGE_VISIBILITY]" >&2
+    echo "       DISK_FORMAT defaults to 'qcow2'." >&2
+    echo "       IMAGE_VISIBILITY defaults to 'public'; accepted values: public, private." >&2
     exit 2
 }
 
-[[ $# -ge 2 && $# -le 3 ]] || usage
+[[ $# -ge 2 && $# -le 4 ]] || usage
 
 IMAGE_FILE=$1
 IMAGE_NAME=$2
 DISK_FORMAT=${3:-qcow2}
+IMAGE_VISIBILITY=${4:-public}
 
 [[ -f "$IMAGE_FILE" && -r "$IMAGE_FILE" ]] || {
     echo "ERROR: Image file is not readable: $IMAGE_FILE" >&2
     exit 1
 }
+
+case "$IMAGE_VISIBILITY" in
+    public|private) ;;
+    *)
+        echo "ERROR: Invalid image visibility '$IMAGE_VISIBILITY'. Must be 'public' or 'private'." >&2
+        exit 1
+        ;;
+esac
 
 GLANCE_HOSTS=(
     "10.231.228.12:9494"
@@ -85,7 +96,7 @@ done
 
 # Generate correctly escaped JSON.
 CREATE_PAYLOAD=$(
-    python3 - "$IMAGE_NAME" "$DISK_FORMAT" <<'PY'
+    python3 - "$IMAGE_NAME" "$DISK_FORMAT" "$IMAGE_VISIBILITY" <<'PY'
 import json
 import sys
 
@@ -93,7 +104,7 @@ print(json.dumps({
     "name": sys.argv[1],
     "disk_format": sys.argv[2],
     "container_format": "bare",
-    "visibility": "public",
+    "visibility": sys.argv[3],
 }))
 PY
 )
