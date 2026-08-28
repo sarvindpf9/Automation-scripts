@@ -594,6 +594,68 @@ check_rsyslog_pf9_rules() {
     done
 }
 
+check_sysctl_settings() {
+    local sysctl_dir="/etc/sysctl.d"
+    local -A expected=(
+        ["net.ipv4.tcp_retries2"]="7"
+        ["vm.swappiness"]="10"
+    )
+
+    local key
+    for key in \
+        "net.ipv4.tcp_retries2" \
+        "vm.swappiness"; do
+
+        local want="${expected[$key]}" got
+        got=$(sysctl -n "$key" 2>/dev/null || true)
+
+        if [[ "$got" == "$want" ]]; then
+            OK "$key = $got"
+        elif [[ -n "$got" ]]; then
+            WARN "$key = $got  (expected: $want)"
+        else
+            FAIL "$key not set  (expected: $want)"
+        fi
+
+        if [[ ! -d "$sysctl_dir" ]]; then
+            FAIL "$sysctl_dir directory not found"
+            continue
+        fi
+
+        local matching_files=()
+        local conf_file configured_value
+        for conf_file in "$sysctl_dir"/*.conf; do
+            [[ -r "$conf_file" ]] || continue
+
+            configured_value=$(awk -F'[[:space:]]*=[[:space:]]*' -v k="$key" '
+                /^[[:space:]]*#/ { next }
+                NF >= 2 {
+                    configured_key = $1
+                    configured_value = $2
+                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", configured_key)
+                    sub(/[[:space:]]*#.*/, "", configured_value)
+                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", configured_value)
+                    if (configured_key == k) {
+                        print configured_value
+                        exit
+                    }
+                }
+            ' "$conf_file")
+
+            [[ "$configured_value" == "$want" ]] && matching_files+=("$conf_file")
+        done
+
+        if [[ ${#matching_files[@]} -gt 0 ]]; then
+            OK "$key found in:"
+            for conf_file in "${matching_files[@]}"; do
+                INFO "$conf_file"
+            done
+        else
+            FAIL "$key not found in any file under $sysctl_dir"
+        fi
+    done
+}
+
 check_pf9_user_group() {
     local user_name="pf9"
     local group_name="pf9group"
@@ -1197,6 +1259,7 @@ else
 
     health_check "CHECK BOND MODE"     check_bond
     health_check "NTP (Mandatory check to pass)"                 check_ntp
+    health_check "SYSCTL SETTINGS"          check_sysctl_settings
     health_check "PACKAGES"            check_packages
     health_check "SERVICES"            check_services
     health_check "ISCSI INITIATOR (to be referred for iSCSI backend)"     check_iscsi_initiator
@@ -1212,6 +1275,7 @@ else
     health_check "GROUP CONSISTENCY (local /etc/group consistency check)"       check_group_consistency
     health_check "RSYSLOG PF9 RULES"        check_rsyslog_pf9_rules
     health_check "PF9 USER AND GROUP (requires to be consistent across all hosts)"       check_pf9_user_group
+    
 
     if [[ -n "$VIRSH_UUID" ]]; then
         health_check "16. VIRSH VMS"           check_virsh_vms "$VIRSH_UUID"
