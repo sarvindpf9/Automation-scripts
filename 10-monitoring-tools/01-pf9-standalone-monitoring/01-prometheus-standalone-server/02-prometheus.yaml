@@ -1,0 +1,36 @@
+global:
+  scrape_interval: 1m
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - 'localhost:9093'
+
+rule_files:
+  - "prometheus-rules.yaml"
+  - "prometheus-alerts.yaml"
+
+scrape_configs:
+
+  - job_name: "node-exporter"     # node_exporter
+    file_sd_configs:
+    - files:
+      - "/etc/prometheus/targets/node-exporters.json"
+    metric_relabel_configs:
+    - source_labels: ['__name__']
+      regex: '(node_cpu_seconds_total|node_memory_MemAvailable_bytes|node_memory_MemTotal_bytes|node_vmstat_pgmajfault|node_filesystem_avail_bytes|node_filesystem_size_bytes|node_filesystem_files_free|node_filesystem_files|node_network_receive_bytes_total|node_network_transmit_bytes_total|node_network_receive_errs_total|node_network_transmit_errs_total|node_disk_written_bytes_total|node_disk_read_bytes_total|node_network_transmit_drop_total|node_network_receive_drop_total|node_systemd_unit_state)'
+      action: 'keep'
+    relabel_configs:
+      - action: replace
+        replacement: "ne"
+        target_label:  job
+
+  - job_name: "libvirt-exporter"
+    file_sd_configs:
+    - files:
+      - "/etc/prometheus/targets/libvirt-exporters.json"
+    metric_relabel_configs:
+    - source_labels: ['__name__']
+      regex: 'libvirt_.+'
+      action: 'keep'

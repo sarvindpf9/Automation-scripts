@@ -1,0 +1,144 @@
+groups:
+  - name: pcd.rules
+    rules:
+      # HOST and VM - CPU and Memory
+      # VM - Total, Allocated, Used (CPU and Memory)
+      - expr: (sum(avg_over_time(libvirt_domain_info_maximum_memory_bytes[5m])) by (domain)) / (1024 * 1024)
+        record: pcd:vm_mem_total
+      - expr: (sum(avg_over_time(libvirt_domain_memory_stats_available_bytes[5m])) by (domain)) / (1024 * 1024)
+        record: pcd:vm_mem_allocated
+      - expr: (1 - (sum(libvirt_domain_memory_stats_available_bytes) / sum(libvirt_domain_info_memory_usage_bytes))) * 100
+        record: pcd:vm_mem_usage_percent
+      - expr: sum by (domain) (libvirt_qemu_memory_usage_bytes)
+        record: pcd:vm_mem_usage
+      - expr: sum by (domain) (rate(libvirt_domain_info_cpu_time_seconds_total[2m]))
+        record: pcd:vm_cpu_usage
+      - expr: sum by (domain) (libvirt_domain_info_virtual_cpus)
+        record: pcd:vm_cpu_total
+ 
+      # HOST - Total, Used (CPU and Memory)
+      # count without() preserves host_name, cluster_name, instance from SD labels
+      - expr: count without(cpu, mode) (node_cpu_seconds_total{mode="idle"})
+        record: pcd:hyp_cpu_total
+      - expr: node_memory_MemTotal_bytes / (1024*1024)
+        record: pcd:hyp_mem_total
+      - expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / (1024*1024)
+        record: pcd:hyp_mem_usage
+      # FIX: was `sum by (host, cluster)` — host/cluster labels do not exist; SD provides host_name/cluster_name
+      #- expr: sum by (host_name, cluster_name) (rate(node_cpu_seconds_total{mode!="idle"}[2m]))
+      - expr: sum by (host_name, cluster_name, instance) (rate(node_cpu_seconds_total{mode!="idle"}[2m]))
+        record: pcd:hyp_cpu_usage
+ 
+      # Number of VMs
+      - expr: count(count by (domain) (libvirt_domain_memory_stats_available_bytes))
+        record: pcd:vm_total
+ 
+      # Number of HOSTs
+      # FIX: was `count(count by (host) (up{job="ne"}))` — wrong label (host vs host_name), result had no cluster_name
+      - expr: count by (cluster_name) (count by (host_name, cluster_name) (up{job="ne"}))
+        record: pcd:hyp_total
+ 
+      # VM CPU Throttling
+      - expr: (rate(libvirt_domain_vcpu_wait_seconds_total[5m]) + rate(libvirt_domain_vcpu_delay_seconds_total[5m])) / rate(libvirt_domain_vcpu_time_seconds_total[5m]) * 100
+        record: pcd:vm_cpu_throttling_percentage
+ 
+      # HOST and VM Storage
+      # VM
+      - expr: sum by (domain) ((libvirt_domain_block_stats_capacity_bytes))
+        record: pcd:vm_total_storage
+      - expr: sum by (domain) (libvirt_domain_block_stats_allocation)
+        record: pcd:vm_allocated_storage
+      - expr: (sum by (domain) (libvirt_domain_block_stats_allocation) / sum by (domain) (libvirt_domain_block_stats_capacity_bytes)) * 100
+        record: pcd:vm_used_storage
+      - expr: rate(libvirt_domain_block_stats_read_bytes_total[15m])
+        record: pcd:vm_read_throughput
+      - expr: rate(libvirt_domain_block_stats_write_bytes_total[15m])
+        record: pcd:vm_write_throughput
+      - expr: rate(libvirt_domain_block_stats_read_requests_total[15m])
+        record: pcd:vm_read_iops
+      - expr: rate(libvirt_domain_block_stats_write_requests_total[15m])
+        record: pcd:vm_write_iops
+      - expr: rate(libvirt_domain_block_stats_read_time_seconds_total[15m]) / rate(libvirt_domain_block_stats_read_requests_total[15m])
+        record: pcd:vm_read_latency
+      - expr: rate(libvirt_domain_block_stats_write_time_seconds_total[15m]) / rate(libvirt_domain_block_stats_write_requests_total[15m])
+        record: pcd:vm_write_latency
+ 
+      # HOST
+      # FIX: was `by (fstype, host)` throughout — host label does not exist
+      - expr: sum(avg_over_time(node_filesystem_size_bytes[5m])) by (fstype, host_name, cluster_name)
+        record: pcd:hyp_disk_space
+      - expr: sum by (fstype, host_name, cluster_name) ((1 - (avg_over_time(node_filesystem_avail_bytes[5m]) / avg_over_time(node_filesystem_size_bytes[5m]))) * 100)
+        record: pcd:hyp_disk_usage
+      - expr: (sum(avg_over_time(node_filesystem_size_bytes[5m])) by (fstype, host_name, cluster_name)) - (sum(avg_over_time(node_filesystem_avail_bytes[5m])) by (fstype, host_name, cluster_name))
+        record: pcd:hyp_disk_usage_bytes:avg5m
+      - expr: sum(avg_over_time(node_filesystem_avail_bytes[5m])) by (fstype, host_name, cluster_name)
+        record: pcd:hyp_disk_free_bytes:avg5m
+ 
+      # HOST and VM Network
+      # VM
+      - expr: sum by (domain) (rate(libvirt_domain_interface_stats_receive_bytes_total[15m]))
+        record: pcd:vm_rx_bytes
+      - expr: sum by (domain) (rate(libvirt_domain_interface_stats_transmit_bytes_total[15m]))
+        record: pcd:vm_tx_bytes
+      - expr: sum by (domain) (rate(libvirt_domain_interface_stats_receive_drops_total[15m]))
+        record: pcd:vm_rx_packets_drop
+      - expr: sum by (domain) (rate(libvirt_domain_interface_stats_transmit_drops_total[15m]))
+        record: pcd:vm_tx_packets_drop
+ 
+      # HOST
+      # FIX: was `sum by (host)` / `sum by (host, cluster)` — both labels do not exist
+      - expr: sum by (host_name, cluster_name) (irate(node_network_receive_bytes_total[2m]))
+        record: pcd:hyp_net_rx_throughput
+      - expr: sum by (host_name, cluster_name) (irate(node_network_transmit_bytes_total[2m]))
+        record: pcd:hyp_net_tx_throughput
+ 
+      # FIX: was `by (host, cluster, device)`
+      - expr: sum by (host_name, cluster_name, device) (rate(node_disk_read_bytes_total[5m]))
+        record: pcd:hyp_disk_read_throughput
+      - expr: sum by (host_name, cluster_name, device) (rate(node_disk_written_bytes_total[5m]))
+        record: pcd:hyp_disk_write_throughput
+ 
+      # drop totals — no aggregation dimension issue; labels pass through from raw metric
+      - expr: sum(node_network_receive_drop_total{device!="lo"})
+        record: pcd:hyp_net_rx_drop_total
+      - expr: sum(node_network_transmit_drop_total{device!="lo"})
+        record: pcd:hyp_net_tx_drop_total
+      - expr: irate(node_network_receive_drop_total{device!="lo"}[5m])
+        record: pcd:hyp_net_rx_drop_rate:5m
+      - expr: irate(node_network_transmit_drop_total{device!="lo"}[5m])
+        record: pcd:hyp_net_tx_drop_rate:5m
+ 
+      # Host network interface rules — irate() passes all labels through; no change needed
+      - record: pcd:hyp_net_if_rx_bytes:rate2m
+        expr: |
+          irate(
+            node_network_receive_bytes_total{
+              device!~"^(lo|veth.*|docker.*|virbr.*|br-.*|cni.*|flannel.*|kube.*|vxlan.*|tap.*|qvb.*|qvo.*|qbr.*|ovs.*)$"
+            }[2m]
+          )
+      - record: pcd:hyp_net_if_tx_bytes:rate2m
+        expr: |
+          irate(
+            node_network_transmit_bytes_total{
+              device!~"^(lo|veth.*|docker.*|virbr.*|br-.*|cni.*|flannel.*|kube.*|vxlan.*|tap.*|qvb.*|qvo.*|qbr.*|ovs.*)$"
+            }[2m]
+          )
+      - record: pcd:hyp_net_if_rx_MBps
+        expr: pcd:hyp_net_if_rx_bytes:rate2m / 1024 / 1024
+      - record: pcd:hyp_net_if_tx_MBps
+        expr: pcd:hyp_net_if_tx_bytes:rate2m / 1024 / 1024
+      - record: pcd:hyp_net_if_total_MBps
+        expr: pcd:hyp_net_if_rx_MBps + pcd:hyp_net_if_tx_MBps
+ 
+      # FIX: was `sum by (instance)` — instance is not host_name
+      - record: pcd:hyp_net_host_rx_MBps
+        expr: sum by (host_name, cluster_name) (pcd:hyp_net_if_rx_MBps)
+      - record: pcd:hyp_net_host_tx_MBps
+        expr: sum by (host_name, cluster_name) (pcd:hyp_net_if_tx_MBps)
+      - record: pcd:hyp_net_host_total_MBps
+        expr: pcd:hyp_net_host_rx_MBps + pcd:hyp_net_host_tx_MBps
+ 
+      #- record: pcd:node_systemd_unit_state
+      #  expr: node_systemd_unit_state{state='active'}
+      - record: pcd:node_systemd_unit_state
+        expr: sum by (name, host_name, cluster_name, instance) (node_systemd_unit_state{state="active"})
