@@ -893,7 +893,7 @@ check_virsh_vms() {
     mapfile -t dms < <(awk '{print $4}' <<< "$domblk" | grep -oE 'dm-[0-9]+' | sort -u)
 
     if ((${#dms[@]} == 0)); then
-        WARN "No dm-* devices found for $vm"
+        WARN "No dm-* devices found for $vm (can be ignored of disk/by-id mpath devices are visible)"
         return
     fi
 
@@ -1197,15 +1197,26 @@ check_vm_disk_multipath() {
         local domblk
         domblk=$(virsh domblklist --details "$vm" 2>/dev/null || true)
         if [[ -n "$domblk" ]]; then
-            mapfile -t dm_devs < <(awk '{print $4}' <<< "$domblk" \
-                | grep -oE 'dm-[0-9]+' | sort -u)
+            while IFS= read -r dev_path; do
+                [[ "$dev_path" == /dev/* ]] || continue
+                if [[ "$dev_path" =~ /dev/(dm-[0-9]+)$ ]]; then
+                    dm_devs+=("${BASH_REMATCH[1]}")
+                else
+                    # Covers /dev/mapper/* and /dev/disk/by-id/dm-uuid-mpath-* (and
+                    # any other by-id alias) by resolving the symlink to the real dm-N node.
+                    local resolved
+                    resolved=$(readlink -f "$dev_path" 2>/dev/null || true)
+                    [[ "$resolved" =~ /(dm-[0-9]+)$ ]] && dm_devs+=("${BASH_REMATCH[1]}")
+                fi
+            done < <(awk '{print $4}' <<< "$domblk")
+            mapfile -t dm_devs < <(printf '%s\n' "${dm_devs[@]}" | sort -u)
         fi
         if [[ ${#dm_devs[@]} -eq 0 && -r "$qemu_dir/$vm.xml" ]]; then
             while IFS= read -r dev_path; do
                 [[ -z "$dev_path" ]] && continue
                 if [[ "$dev_path" =~ /dev/(dm-[0-9]+)$ ]]; then
                     dm_devs+=("${BASH_REMATCH[1]}")
-                elif [[ "$dev_path" == /dev/mapper/* ]]; then
+                else
                     local resolved
                     resolved=$(readlink -f "$dev_path" 2>/dev/null || true)
                     [[ "$resolved" =~ /(dm-[0-9]+)$ ]] && dm_devs+=("${BASH_REMATCH[1]}")
@@ -1254,6 +1265,8 @@ if [[ "$CHECK_MPATH_ORPHAN" == true || "$LIST_VM_MPATH" == true || "$CHECK_GLANC
     [[ "$CHECK_MPATH_ORPHAN" == true ]] && health_check "MULTIPATH ORPHANS"  check_multipath_orphans
     [[ "$LIST_VM_MPATH"      == true ]] && health_check "VM DISK MULTIPATH"   check_vm_disk_multipath
     [[ "$CHECK_GLANCE_MOUNT" == true ]] && health_check "GLANCE IMAGE MOUNT" check_glance_mount
+elif [[ -n "$VIRSH_UUID" ]]; then
+    health_check "VIRSH VMS"           check_virsh_vms "$VIRSH_UUID"
 else
     [[ "$CHECK_SUDOERS" == true ]] && health_check "1.  PASSWORDLESS SUDO"   check_sudoers
 
@@ -1275,9 +1288,7 @@ else
     health_check "GROUP CONSISTENCY (local /etc/group consistency check)"       check_group_consistency
     health_check "RSYSLOG PF9 RULES"        check_rsyslog_pf9_rules
     health_check "PF9 USER AND GROUP (requires to be consistent across all hosts)"       check_pf9_user_group
-    
-
-    if [[ -n "$VIRSH_UUID" ]]; then
-        health_check "16. VIRSH VMS"           check_virsh_vms "$VIRSH_UUID"
-    fi
+    #if [[ -n "$VIRSH_UUID" ]]; then
+    #    health_check "VIRSH VMS"           check_virsh_vms "$VIRSH_UUID"
+    #fi
 fi

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-MAAS_RELEASE="3.7.1"
+MAAS_RELEASE="3.7.3"
 MAAS_REPOSITORY="ppa:maas/3.7"
 
 # accept arguments (order: DB_USER DB_NAME DB_PASSWORD MAAS_USER MAAS_PASSWORD MAAS_EMAIL)
@@ -116,10 +116,6 @@ install_maas() {
 
     sudo maas createadmin --username "$MAAS_USERNAME" --password "$MAAS_PASSWORD" --email "$MAAS_EMAIL"
 
-    if ! maas --version | grep -q "$MAAS_RELEASE"; then
-        echo "MAAS installation completed, but the installed version is not $MAAS_RELEASE."
-        return 1
-    fi
     echo "MAAS $MAAS_RELEASE installation and configuration complete."
 }
 

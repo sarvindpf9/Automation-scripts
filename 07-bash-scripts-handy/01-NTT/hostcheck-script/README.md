@@ -22,7 +22,7 @@ Local health-check utility for supported Platform9 KVM compute hosts.
 **What it does:**
 
 1. Detects the operating system and selects the Debian or RPM package-query backend. It exits with status `2` if OS detection fails, the OS is unsupported, or the required package-query command is unavailable.
-2. Runs either the full default host-check suite or only the requested standalone checks.
+2. Runs one of three mutually exclusive modes: the requested standalone check(s) (`check-mpath-orphan`, `list-vm-mpath`, `check-glance-mount`), the single `VIRSH VMS` check when only `--uuid` is given, or the full default host-check suite.
 3. Reports results as `[ OK ]`, `[ FAIL ]`, `[ WARN ]`, `[ NOTE ]`, and informational lines. Individual check failures normally do not determine the script's exit status because each health-check function is invoked with failure suppression.
 4. Optionally writes combined standard output and standard error to a log while continuing to display coloured output in the terminal. ANSI colour codes are removed from the file.
 
@@ -38,7 +38,7 @@ sudo ./hostInfo_check-v2.sh
 # Add the passwordless-sudo check to the full default suite
 sudo ./hostInfo_check-v2.sh check-sudoers
 
-# Add inspection of one VM to the full default suite
+# Run only the VM block-device / multipath check for one VM (by UUID)
 sudo ./hostInfo_check-v2.sh --uuid <VM_UUID>
 
 # Run only the multipath-orphan check
@@ -60,13 +60,17 @@ sudo ./hostInfo_check-v2.sh --log
 sudo ./hostInfo_check-v2.sh --output <OUTPUT_FILE>
 ```
 
-Arguments may be combined. If any standalone selector (`check-mpath-orphan`, `list-vm-mpath`, or `check-glance-mount`) is present, the script runs only the selected standalone check or checks; it skips the default suite, `check-sudoers`, and any `--uuid` VM check.
+Dispatch is mutually exclusive across three modes, evaluated in this order:
+
+1. If any standalone selector (`check-mpath-orphan`, `list-vm-mpath`, `check-glance-mount`) is present, the script runs only the selected standalone check(s) and skips everything else, including `check-sudoers` and `--uuid`.
+2. Otherwise, if `--uuid <VM_UUID>` is present, the script runs only the `VIRSH VMS` check for that VM and skips the full default suite.
+3. Otherwise, the script runs the full default suite (with `check-sudoers` added if requested).
 
 ### Options
 
 | Flag | Required | Description |
 | ---- | -------- | ----------- |
-| `--uuid <VM_UUID>` | No | Adds a VM block-device check to the full suite. Resolves the UUID with `virsh`, lists its disks, and maps any `dm-*` devices to multipath maps. A missing value exits with status `2`. |
+| `--uuid <VM_UUID>` | No | Standalone `VIRSH VMS` mode when no other selector is present: resolves the UUID with `virsh`, prints the VM's block-device list, and maps any `dm-*` devices to multipath maps. Ignored if `check-mpath-orphan`, `list-vm-mpath`, or `check-glance-mount` is also given. A missing value exits with status `2`. |
 | `--virsh` | No | Accepted for backward compatibility and otherwise has no effect. `--uuid` enables the VM-specific check. |
 | `check-sudoers` | No | Adds a scan for exact `NOPASSWD: ALL` user entries in `/etc/sudoers` and readable files under `/etc/sudoers.d`. Applies only to the full suite. |
 | `check-mpath-orphan` | No | Standalone selector. Reports multipath maps not referenced by libvirt VM XML and reports `failed` or `faulty` paths. |
@@ -100,15 +104,19 @@ The following checks run when no standalone selector is supplied:
 | Group database | Runs the read-only `grpck -r` consistency check. |
 | Platform9 rsyslog rules | Searches `/etc/rsyslog.d` for rules targeting the six Platform9 log paths encoded in the script. |
 | Platform9 account | Reports whether the `pf9` user and `pf9group` group exist and prints their `getent` records. |
-| VM block devices | Runs only with `--uuid`; maps the selected VM's `dm-*` disks to `/dev/mapper` multipath names. |
+
+`--uuid` is not part of this table: it is a separate standalone mode (see below), not an addition to the default suite.
 
 ### Standalone-check behaviour
 
 | Check | Applies to |
 | ---- | ---------- |
 | Compare every multipath `dm-*` map with disk sources in `/etc/libvirt/qemu/*.xml`; report unreferenced maps and failed/faulty paths | `check-mpath-orphan` only |
-| Query running VMs, use `virsh domblklist` with XML fallback, and report each multipath map as active, degraded, dead, or missing | `list-vm-mpath` only |
+| Query running VMs, use `virsh domblklist --details` (falling back to the VM's libvirt XML) to find each disk's `dm-*` device — resolving `/dev/mapper/*` and `/dev/disk/by-id/dm-uuid-mpath-*`/other by-id aliases to their real `dm-N` node via `readlink -f` — then report each multipath map as active, degraded, dead, or missing | `list-vm-mpath` only |
 | Normalize the requested directory, find a matching mount point at or below it in `/etc/fstab`, then require mode `755` and owner/group `pf9:pf9group` if the directory exists | `check-glance-mount` only |
+| Resolve the UUID with `virsh domname`, print the VM's `virsh domblklist --details` block-device list, then map any `dm-*` device found in the `Source` column to its multipath map | `--uuid <VM_UUID>` only (skipped if any selector above is also given) |
+
+Unlike `list-vm-mpath`, the `--uuid` block-device mapping does **not** resolve `/dev/mapper/*` or `/dev/disk/by-id/*` sources to a `dm-N` device — it only matches a `Source` value that already contains a literal `dm-<digits>`. If disks are attached via `/dev/disk/by-id/dm-uuid-mpath-*` (the Cinder/Ceph RBD multipath convention), `--uuid` prints the block-device list correctly but then reports `No dm-* devices found for <vm> (can be ignored of disk/by-id mpath devices are visible)` for the multipath-mapping step — use `list-vm-mpath` instead to get the resolved multipath state in that case.
 
 The standalone selectors can be combined in one invocation:
 
