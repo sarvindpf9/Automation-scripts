@@ -252,11 +252,11 @@ check_glance_mount() {
     group=$(stat -c '%G' "$normalized_directory")
     INFO "$normalized_directory has permissions: $permissions with owner: $owner; group: $group"
 
-    if [[ "$permission_mode" == "755" ]]; then
-        OK "$normalized_directory permissions are consistent (755)"
+    if [[ "$permission_mode" == "744" ]]; then
+        OK "$normalized_directory permissions are consistent (744)"
     else
-        FAIL "$normalized_directory permissions are inconsistent: $permission_mode (expected 755)"
-        INFO "Correct with: chmod 755 -- '$normalized_directory'"
+        FAIL "$normalized_directory permissions are inconsistent: $permission_mode (expected 744)"
+        INFO "Correct with: chmod 744 -- '$normalized_directory'"
     fi
 
     if [[ "$owner" == "pf9" && "$group" == "pf9group" ]]; then
