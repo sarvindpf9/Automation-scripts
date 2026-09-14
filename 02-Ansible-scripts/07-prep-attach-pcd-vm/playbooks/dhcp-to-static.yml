@@ -9,6 +9,7 @@
 #   target_interfaces   - list of DHCP NICs to convert; defaults to all dhcp4: true ethernets
 #   static_network_backend - netplan or networkmanager; defaults from guest OS
 #   netplan_config_file    - netplan file to update; defaults to /etc/netplan/50-cloud-init.yaml
+#   netplan_reboot_timeout - seconds to wait for a Netplan guest to reboot; defaults to 600
 #
 # Usage:
 #   # Single VM by IP (inline inventory):

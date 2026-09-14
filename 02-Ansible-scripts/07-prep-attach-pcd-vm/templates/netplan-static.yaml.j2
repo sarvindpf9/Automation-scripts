@@ -1,16 +1,2 @@
-# Managed by Ansible. Manual edits will be overwritten on next run.
-network:
-  version: 2
-  ethernets:
-    {{ _dhcp_iface }}:
-      dhcp4: false
-      addresses:
-        - {{ _static_ip }}/{{ _static_prefix }}
-      routes:
-        - to: default
-          via: {{ _static_gateway }}
-      nameservers:
-        addresses:
-{% for ns in _static_nameservers %}
-          - {{ ns }}
-{% endfor %}
+# Managed by Ansible. Manual edits will be overwritten.
+{{ _fresh_netplan_doc | to_nice_yaml(indent=2, sort_keys=false) }}

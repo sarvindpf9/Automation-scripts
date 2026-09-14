@@ -30,15 +30,48 @@
 
 - name: Convert DHCP netplan interfaces to static
   when: _static_network_backend == 'netplan'
+  become: true
   block:
-    - name: Resolve netplan configuration path
+    - name: Resolve managed netplan path
       ansible.builtin.set_fact:
-        _netplan_config_file: "{{ netplan_config_file | default('/etc/netplan/50-cloud-init.yaml') }}"
+        _netplan_managed_file: >-
+          {{ netplan_config_file | default('/etc/netplan/50-cloud-init.yaml') }}
+
+    - name: Check managed netplan file
+      ansible.builtin.stat:
+        path: "{{ _netplan_managed_file }}"
+      register: _netplan_managed_file_status
+
+    - name: Check backed-up netplan source
+      ansible.builtin.stat:
+        path: >-
+          /var/backups/ansible-netplan/{{ _netplan_managed_file | basename }}
+      register: _netplan_backup_source_status
+      when: not _netplan_managed_file_status.stat.exists
+
+    - name: Assert a netplan source is available
+      ansible.builtin.assert:
+        that:
+          - >-
+            _netplan_managed_file_status.stat.exists
+            or (_netplan_backup_source_status.stat | default({})).get('exists', false)
+        fail_msg: >-
+          Neither {{ _netplan_managed_file }} nor its backup under
+          /var/backups/ansible-netplan exists.
+
+    - name: Resolve readable netplan source
+      ansible.builtin.set_fact:
+        _netplan_read_file: >-
+          {{
+            _netplan_managed_file
+            if _netplan_managed_file_status.stat.exists
+            else '/var/backups/ansible-netplan/'
+              ~ (_netplan_managed_file | basename)
+          }}
 
     - name: Read current netplan configuration
       ansible.builtin.slurp:
-        src: "{{ _netplan_config_file }}"
-      become: true
+        src: "{{ _netplan_read_file }}"
       register: _netplan_current
 
     - name: Parse current netplan configuration
@@ -51,39 +84,223 @@
           - _netplan_doc is mapping
           - _netplan_doc.network is mapping
           - _netplan_doc.network.ethernets is mapping
-        fail_msg: "{{ _netplan_config_file }} must contain network.ethernets before DHCP interfaces can be converted."
+          - _netplan_doc.network.ethernets | length > 0
+        fail_msg: "{{ _netplan_managed_file }} must contain network.ethernets before DHCP interfaces can be converted."
+
+    - name: Initialise resolved netplan interface records
+      ansible.builtin.set_fact:
+        _netplan_interface_records: []
+
+    - name: Initialise MAC address to interface name mapping
+      ansible.builtin.set_fact:
+        _interface_name_by_mac: {}
+
+    - name: Build MAC address to actual interface name mapping
+      ansible.builtin.set_fact:
+        _interface_name_by_mac: >-
+          {{
+            _interface_name_by_mac
+            | combine({(ansible_facts[item]['macaddress'] | lower): item})
+          }}
+      loop: "{{ ansible_facts.interfaces }}"
+      loop_control:
+        label: "{{ item }}"
+      when:
+        - ansible_facts[item] is defined
+        - ansible_facts[item].macaddress is defined
+
+    - name: Resolve netplan IDs to actual interface names by MAC address
+      ansible.builtin.set_fact:
+        _netplan_interface_records: >-
+          {{
+            _netplan_interface_records
+            + [
+                {
+                  'netplan_id': item.key,
+                  'name': _actual_interface_name,
+                  'config': item.value
+                }
+              ]
+          }}
+      vars:
+        _netplan_macaddress: >-
+          {{
+            item.value.get('match', {}).get('macaddress', '')
+            | lower
+          }}
+        _configured_interface_name: >-
+          {{ item.value['set-name'] | default(item.key) }}
+        _actual_interface_name: >-
+          {{
+            _interface_name_by_mac.get(_netplan_macaddress)
+            | default(
+                _configured_interface_name
+                if _configured_interface_name in ansible_facts.interfaces
+                else item.key,
+                true
+              )
+          }}
+      loop: "{{ _netplan_doc.network.ethernets | dict2items }}"
+      loop_control:
+        label: "{{ item.key }} -> {{ _actual_interface_name }}"
+
+    - name: Assert actual interface names are unique
+      ansible.builtin.assert:
+        that:
+          - >-
+            _netplan_interface_records | map(attribute='name') | unique | length
+            == _netplan_interface_records | length
+        fail_msg: >-
+          Multiple netplan entries resolve to the same actual interface name.
+
+    - name: Read predictable names for live netplan interfaces
+      ansible.builtin.command:
+        argv:
+          - udevadm
+          - info
+          - --query=property
+          - "--path=/sys/class/net/{{ item.name }}"
+      register: _udev_interface_results
+      changed_when: false
+      loop: "{{ _netplan_interface_records }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Initialise predictable netplan interface records
+      ansible.builtin.set_fact:
+        _predictable_netplan_interface_records: []
+
+    - name: Add predictable names to netplan interface records
+      ansible.builtin.set_fact:
+        _predictable_netplan_interface_records: >-
+          {{
+            _predictable_netplan_interface_records
+            + [item.item | combine({'target_name': _slot_name})]
+          }}
+      vars:
+        _slot_name: >-
+          {{
+            item.stdout_lines
+            | select('match', '^ID_NET_NAME_SLOT=ens[0-9]+$')
+            | map('regex_replace', '^ID_NET_NAME_SLOT=', '')
+            | first
+            | default('')
+          }}
+      loop: "{{ _udev_interface_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }} -> {{ _slot_name | default('unresolved', true) }}"
+
+    - name: Publish predictable netplan interface records
+      ansible.builtin.set_fact:
+        _netplan_interface_records: >-
+          {{ _predictable_netplan_interface_records }}
+
+    - name: Validate predictable interface names
+      ansible.builtin.assert:
+        that:
+          - item.target_name is match('^ens[0-9]+$')
+        fail_msg: >-
+          Could not discover an ID_NET_NAME_SLOT=ensXX property for
+          {{ item.name }}. Refusing to guess a predictable interface name.
+      loop: "{{ _netplan_interface_records }}"
+      loop_control:
+        label: "{{ item.name }} -> {{ item.target_name | default('unresolved', true) }}"
+
+    - name: Assert predictable interface names are unique
+      ansible.builtin.assert:
+        that:
+          - >-
+            _netplan_interface_records
+            | map(attribute='target_name')
+            | unique
+            | length
+            == _netplan_interface_records | length
+        fail_msg: >-
+          Multiple interfaces resolve to the same predictable interface name.
+
+    - name: Initialise netplan interface rename mapping
+      ansible.builtin.set_fact:
+        _netplan_interface_rename_map: {}
+
+    - name: Build netplan interface rename mapping
+      ansible.builtin.set_fact:
+        _netplan_interface_rename_map: >-
+          {{
+            _netplan_interface_rename_map
+            | combine(
+                {
+                  item.netplan_id: item.target_name,
+                  item.name: item.target_name
+                }
+              )
+          }}
+      loop: "{{ _netplan_interface_records }}"
+      loop_control:
+        label: "{{ item.name }} -> {{ item.target_name }}"
+
+    - name: Initialise DHCP target interface list
+      ansible.builtin.set_fact:
+        _dhcp_target_ifaces: []
 
     - name: Resolve DHCP interfaces to convert
       ansible.builtin.set_fact:
-        _dhcp_target_ifaces: >-
-          {{
-            _requested_target_interfaces
-            if _requested_target_interfaces | length > 0
-            else _netplan_doc.network.ethernets
-              | dict2items
-              | selectattr('value.dhcp4', 'defined')
-              | selectattr('value.dhcp4', 'equalto', true)
-              | map(attribute='key')
-              | list
-          }}
+        _dhcp_target_ifaces: "{{ _dhcp_target_ifaces + [item.name] }}"
+      loop: "{{ _netplan_interface_records }}"
+      loop_control:
+        label: "{{ item.netplan_id }} -> {{ item.name }}"
+      when:
+        - item.config.dhcp4 | default(false) | bool
+        - >-
+          _requested_target_interfaces | length == 0
+          or item.name in _requested_target_interfaces
+          or item.target_name in _requested_target_interfaces
+          or item.netplan_id in _requested_target_interfaces
 
     - name: Assert DHCP target interfaces are valid
       ansible.builtin.assert:
         that:
           - _dhcp_target_ifaces | length > 0
-          - item in _netplan_doc.network.ethernets
-          - _netplan_doc.network.ethernets[item].dhcp4 | default(false) | bool
           - ansible_facts[item] is defined
           - ansible_facts[item].ipv4 is defined
-        fail_msg: "Interface {{ item }} must exist in {{ _netplan_config_file }}, have dhcp4: true, and have a gathered IPv4 address."
+          - ansible_facts[item].macaddress is defined
+        fail_msg: "Interface {{ item }} must resolve from {{ _netplan_managed_file }}, have dhcp4: true, and have gathered IPv4 and MAC information."
       loop: "{{ _dhcp_target_ifaces }}"
 
-    - name: Build static netplan entries for DHCP interfaces
+    - name: Assert every explicitly requested interface was resolved
+      ansible.builtin.assert:
+        that:
+          - >-
+            item in _dhcp_target_ifaces
+            or item in (
+              _netplan_interface_records
+              | selectattr('name', 'in', _dhcp_target_ifaces)
+              | map(attribute='target_name')
+              | list
+            )
+            or (
+              _netplan_interface_records
+              | selectattr('netplan_id', 'equalto', item)
+              | selectattr('name', 'in', _dhcp_target_ifaces)
+              | list
+              | length
+            ) > 0
+        fail_msg: "Requested interface {{ item }} is not a DHCP-enabled interface in {{ _netplan_managed_file }}."
+      loop: "{{ _requested_target_interfaces }}"
+      when: _requested_target_interfaces | length > 0
+
+    - name: Initialise fresh ethernet configuration
       ansible.builtin.set_fact:
-        _static_interface_configs: "{{ _static_interface_configs | default({}) | combine({item: _static_iface_config}, recursive=True) }}"
+        _fresh_ethernet_configs: {}
+
+    - name: Build fresh ethernet configuration with static targets
+      ansible.builtin.set_fact:
+        _fresh_ethernet_configs: >-
+          {{
+            _fresh_ethernet_configs
+            | combine({item.target_name: _fresh_interface_config})
+          }}
       vars:
-        _static_address: "{{ ansible_facts[item]['ipv4']['address'] }}/{{ ansible_facts[item]['ipv4']['prefix'] }}"
-        _default_route: >-
+        _static_route: >-
           {{
             {
               'routes': [
@@ -93,46 +310,141 @@
                 }
               ]
             }
-            if item == ansible_facts.get('default_ipv4', {}).get('interface', '')
+            if item.name == ansible_facts.get('default_ipv4', {}).get('interface', '')
               and ansible_facts.get('default_ipv4', {}).get('gateway', '') | length > 0
             else {}
           }}
-        _static_iface_config: >-
+        _static_interface_config: >-
           {{
-            _netplan_doc.network.ethernets[item]
+            item.config
             | combine(
                 {
+                  'match': {
+                    'macaddress': ansible_facts[item.name]['macaddress'] | lower
+                  },
+                  'set-name': item.target_name,
                   'dhcp4': false,
-                  'addresses': [_static_address],
+                  'addresses': [
+                    ansible_facts[item.name]['ipv4']['address']
+                    ~ '/'
+                    ~ ansible_facts[item.name]['ipv4']['prefix']
+                  ],
                   'nameservers': {
                     'addresses': _static_nameservers
-                  }
+                  },
+                  'optional': true
                 },
                 recursive=True
               )
-            | combine(_default_route, recursive=True)
+            | combine(_static_route, recursive=True)
           }}
-      loop: "{{ _dhcp_target_ifaces }}"
+        _actual_interface_identity: >-
+          {{
+            {
+              'match': {
+                'macaddress': ansible_facts[item.name]['macaddress'] | lower
+              },
+              'set-name': item.target_name
+            }
+            if ansible_facts[item.name] is defined
+              and ansible_facts[item.name].macaddress is defined
+            else {}
+          }}
+        _preserved_interface_config: >-
+          {{
+            item.config
+            | combine(_actual_interface_identity, recursive=True)
+          }}
+        _fresh_interface_config: >-
+          {{
+            _static_interface_config
+            if item.name in _dhcp_target_ifaces
+            else _preserved_interface_config
+          }}
+      loop: "{{ _netplan_interface_records }}"
+      loop_control:
+        label: "{{ item.name }} -> {{ item.target_name }}"
 
-    - name: Merge static entries into current netplan configuration
+    - name: Initialise renamed VLAN configuration
       ansible.builtin.set_fact:
-        _updated_netplan_doc: >-
+        _fresh_vlan_configs: {}
+      when: _netplan_doc.network.vlans is defined
+
+    - name: Rewrite VLAN parent interface references
+      ansible.builtin.set_fact:
+        _fresh_vlan_configs: >-
+          {{
+            _fresh_vlan_configs
+            | combine(
+                {
+                  _target_vlan_name: item.value
+                    | combine({'link': _target_parent_interface})
+                }
+              )
+          }}
+      vars:
+        _source_parent_interface: "{{ item.value.link }}"
+        _target_parent_interface: >-
+          {{
+            _netplan_interface_rename_map.get(
+              _source_parent_interface,
+              _source_parent_interface
+            )
+          }}
+        _target_vlan_name: >-
+          {{
+            _target_parent_interface
+            ~ item.key[(_source_parent_interface | length):]
+            if item.key.startswith(_source_parent_interface ~ '.')
+            else item.key
+          }}
+      loop: "{{ _netplan_doc.network.vlans | default({}) | dict2items }}"
+      loop_control:
+        label: "{{ item.key }} -> {{ _target_vlan_name }}"
+      when:
+        - _netplan_doc.network.vlans is defined
+        - item.value.link is defined
+
+    - name: Build fresh unified netplan document
+      ansible.builtin.set_fact:
+        _fresh_netplan_doc: >-
           {{
             _netplan_doc
             | combine(
                 {
                   'network': _netplan_doc.network
                     | combine(
-                        {
-                          'ethernets': _netplan_doc.network.ethernets
-                            | combine(_static_interface_configs, recursive=True)
-                        },
-                        recursive=True
+                        {'ethernets': _fresh_ethernet_configs},
+                        recursive=False
                       )
                 },
-                recursive=True
+                recursive=False
               )
           }}
+
+    - name: Add renamed VLAN configuration to fresh netplan document
+      ansible.builtin.set_fact:
+        _fresh_netplan_doc: >-
+          {{
+            _fresh_netplan_doc
+            | combine(
+                {
+                  'network': _fresh_netplan_doc.network
+                    | combine(
+                        {'vlans': _fresh_vlan_configs},
+                        recursive=False
+                      )
+                },
+                recursive=False
+              )
+          }}
+      when: _netplan_doc.network.vlans is defined
+
+    - name: Validate static nameservers
+      ansible.builtin.assert:
+        that:
+          - _static_nameservers | length > 0
+        fail_msg: "Set nameservers or ensure Ansible facts contain DNS servers."
 
     - name: Disable cloud-init network management
       ansible.builtin.copy:
@@ -141,25 +453,90 @@
         owner: root
         group: root
         mode: '0644'
-      become: true
 
-    - name: Write merged static netplan configuration
+    - name: Find existing netplan files
+      ansible.builtin.find:
+        paths: /etc/netplan
+        patterns:
+          - '*.yaml'
+          - '*.yml'
+        file_type: file
+        recurse: false
+      register: _existing_netplan_files
+
+    - name: Create netplan backup directory
+      ansible.builtin.file:
+        path: /var/backups/ansible-netplan
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Verify netplan backup directory
+      ansible.builtin.stat:
+        path: /var/backups/ansible-netplan
+      register: _netplan_backup_directory
+      when: not ansible_check_mode
+
+    - name: Assert netplan backup directory exists
+      ansible.builtin.assert:
+        that:
+          - _netplan_backup_directory.stat.exists
+          - _netplan_backup_directory.stat.isdir
+        fail_msg: /var/backups/ansible-netplan could not be created.
+      when: not ansible_check_mode
+
+    - name: Back up existing netplan files
       ansible.builtin.copy:
-        dest: "{{ _netplan_config_file }}"
-        content: "{{ _updated_netplan_doc | to_nice_yaml(indent=2, sort_keys=false) }}"
+        src: "{{ item.path }}"
+        dest: "/var/backups/ansible-netplan/{{ item.path | basename }}"
+        remote_src: true
+        force: false
+        owner: root
+        group: root
+        mode: '0600'
+      loop: "{{ _existing_netplan_files.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+      when: not ansible_check_mode
+
+    - name: Remove existing netplan files
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ _existing_netplan_files.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+      when: item.path != _netplan_managed_file
+      register: _netplan_remove
+
+    - name: Write fresh static netplan configuration
+      ansible.builtin.template:
+        src: ../templates/netplan-static.yaml.j2
+        dest: "{{ _netplan_managed_file }}"
         owner: root
         group: root
         mode: '0600'
         backup: true
-      become: true
       register: _netplan_write
 
-    - name: Apply netplan
+    - name: Validate fresh netplan configuration
       ansible.builtin.command:
-        cmd: netplan apply
-      become: true
-      changed_when: true
-      when: _netplan_write.changed
+        cmd: netplan generate
+      changed_when: false
+
+    # Do not run netplan apply here. Renaming the management interface can
+    # terminate SSH before Ansible has issued the reboot operation.
+    - name: Reboot to apply static netplan and predictable interface names
+      ansible.builtin.reboot:
+        msg: >-
+          Reboot initiated by Ansible after static netplan conversion and
+          predictable interface restoration.
+        connect_timeout: 10
+        reboot_timeout: "{{ netplan_reboot_timeout | default(600) }}"
+        post_reboot_delay: 10
+        test_command: ip link show
+      throttle: 1
 
 - name: Convert DHCP NetworkManager interfaces to static
   when: _static_network_backend == 'networkmanager'
