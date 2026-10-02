@@ -82,8 +82,6 @@ vmProfileName = [{
 
 # max VMs allowed per t-shirt size
 maxVmCount = {"default": 3, "large": 2, "xlarge": 1}
-
-
 def checkInputArgs(profile=args.vmprofile, vmcount=args.vmcount):
   if vmcount < 0:
     print(f"vmcount must be >= 0, got {vmcount}")
