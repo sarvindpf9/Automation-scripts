@@ -1,0 +1,12 @@
+---
+# Rendered by input-parser.py. Proxmox host inventory only.
+all:
+  children:
+    proxmox_nodes:
+      hosts:
+{% for host_name, host_vars in proxmox_hosts.items() %}
+        {{ host_name }}:
+{% for var_name, var_value in host_vars.items() %}
+          {{ var_name }}: {{ var_value | tojson }}
+{% endfor %}
+{% endfor %}

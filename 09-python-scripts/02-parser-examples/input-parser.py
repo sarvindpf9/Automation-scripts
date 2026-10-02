@@ -33,6 +33,11 @@ parser.add_argument("-template", "--template", action='store',
                     help="Jinja template rendered with the vars file", required=False)
 parser.add_argument("-output", "--output", action='store', default="vm-config.yml",
                     help="final rendered YAML", required=False)
+parser.add_argument("-set-inventory", "--set-inventory", action='store', default="inventory.yaml",
+                    help="Ansible inventory YAML written by this script", required=False)
+parser.add_argument("-inventory-template", "--inventory-template", action='store',
+                    default=str(Path(__file__).parent / "inventory.yml.j2"),
+                    help="Jinja template used to render the inventory", required=False)
 
 # parser.add_argument("-region", "--region", action='store', help="takes site name as input to form DU name. DU=<portal>-<region> (REQUIRED)", required=False)
 # parser.add_argument("-env", "--env", action='store', help="takes a string value to segregate hosts in the side. Value: STRING", required=False)
@@ -121,7 +126,7 @@ for count in vmNumbers:
   selectedVms[f"ubuntu24-lab-test{count}"] = vm
 
 ###############################################################################
-#           Step 1: combine both profiles into one vars YAML                  #
+#           combine both profiles into one vars YAML                          #
 ###############################################################################
 # keep the password out of the vars file; it is passed straight to the render step
 selectedHost.pop("proxmoxApiPassword", None)
@@ -138,7 +143,7 @@ with open(args.varsfile, "w", encoding="utf-8") as varsFile:
                  default_flow_style=False)
 
 ###############################################################################
-#           Step 2: feed the vars YAML into the Jinja template                #
+#           feed the vars YAML into the Jinja template                        #
 ###############################################################################
 with open(args.varsfile, encoding="utf-8") as varsFile:
   templateVars = yaml.safe_load(varsFile)
@@ -150,20 +155,39 @@ for envName in ("CLOUD_PASSWORD", "CLOUD_INIT_USER_PASSWORD"):
     sys.exit(f"ERROR: environment variable {envName} is not set")
   secretVars[envName.lower()] = os.environ[envName]
 
-templatePath = Path(args.template)
-jinjaEnv = Environment(
-    loader=FileSystemLoader(templatePath.parent),
-    # fail on a missing variable instead of silently rendering ""
-    undefined=StrictUndefined,
-    trim_blocks=True,            # drop the newline after {% ... %} tags
-    lstrip_blocks=True,          # drop indentation before {% ... %} tags
-    keep_trailing_newline=True,
-)
-rendered = jinjaEnv.get_template(
-    templatePath.name).render(**templateVars, **secretVars)
+def renderTemplate(templateFile, outputFile, renderVars):
+  """Render templateFile with renderVars and write the result to outputFile."""
+  templatePath = Path(templateFile)
+  jinjaEnv = Environment(
+      loader=FileSystemLoader(templatePath.parent),
+      # fail on a missing variable instead of silently rendering ""
+      undefined=StrictUndefined,
+      trim_blocks=True,            # drop the newline after {% ... %} tags
+      lstrip_blocks=True,          # drop indentation before {% ... %} tags
+      keep_trailing_newline=True,
+  )
+  rendered = jinjaEnv.get_template(templatePath.name).render(**renderVars)
+  with open(outputFile, "w", encoding="utf-8") as outFile:
+    outFile.write(rendered)
 
-with open(args.output, "w", encoding="utf-8") as outFile:
-  outFile.write(rendered)
+
+renderTemplate(args.template, args.output, {**templateVars, **secretVars})
+
+###############################################################################
+#           create inventory file                                             #
+###############################################################################
+# proxmox node name -> host vars; every entry renders under the proxmox_nodes group
+proxmoxHosts = {
+    templateVars["proxmox_host"]["proxmox_node"]: {
+        "ansible_host": templateVars["proxmox_host"]["ipaddress"],
+        "ansible_user": "root",
+        "ansible_ssh_password": args.proxpass,
+    },
+}
+
+renderTemplate(args.inventory_template, args.set_inventory,
+               {"proxmox_hosts": proxmoxHosts})
 
 print(f"vars file : {args.varsfile}")
 print(f"rendered  : {args.output}")
+print(f"inventory : {args.set_inventory}")
