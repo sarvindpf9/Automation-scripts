@@ -1,0 +1,71 @@
+---
+proxmox_api_host: {{ proxmox_host.ipaddress }}
+proxmox_api_port: {{ proxmox_host.portNumber }}
+proxmox_api_user: "{{ proxmox_host.proxmoxApiUser }}"
+proxmox_api_password: {{ proxmox_api_password | tojson }}
+proxmox_validate_certs: {{ proxmox_host.proxmox_validate_certs }}
+proxmox_api_timeout: {{ proxmox_host.proxmox_api_timeout }}
+
+proxmox_node: {{ proxmox_host.proxmox_node }}
+template_vm_id: {{ proxmox_host.template_vm_id }}
+template_vm_name: {{ proxmox_host.template_vm_name }}
+datastore_id: {{ proxmox_host.datastoreId }}
+cloudinit_drive_datastore_id: {{ proxmox_host.cloudinit_drive_datastore_id }}
+snippet_datastore_id: {{ proxmox_host.snippet_datastore_id }}
+snippet_directory: {{ proxmox_host.snippet_directory }}
+
+generated_guest_inventory_enabled: true
+ssh_public_key_path: ~/.ssh/github-eccentrichead.pub
+cloud_init_user: ubuntu
+cloud_init_user_password: {{ cloud_init_user_password | tojson }}
+
+nameservers:
+  - 192.168.1.1
+
+vm_name_prefix: {{ vm_name_prefix }}
+
+# PCD host enrolment vars
+pcd_region_portal: "https://pf9-salocal.ce.janp1"
+cloud_username: "pf9user@platform9.com"
+cloud_password: {{ cloud_password | tojson }}
+cloud_project_name: "service"
+cloud_region_name: "salocal"
+
+
+pcd_storage_host_entries:
+  - ip: 10.96.14.164
+    names:
+      - pf9-salocal.ce.janp1
+      - salocal
+  - ip: 10.96.14.164
+    names:
+      - pf9.ce.janp1
+      - janp1
+vms:
+{% for vm_key, vm in vms.items() %}
+  {{ vm_key }}:
+    vm_name: {{ vm.vm_name }}
+    memory_mb: {{ vm.memory_mb }}
+    cores: {{ vm.cores }}
+    sockets: {{ vm.sockets }}
+    disk_size_gb: {{ vm.disk_size_gb }}
+    network_interfaces:
+{% for nic in vm.network_interfaces %}
+      - bridge: {{ nic.bridge }}
+        dhcp4: {{ nic.dhcp4 }}
+{% endfor %}
+{% endfor %}
+# VM behavior options.
+start_vms: true
+detach_cloudinit_drive: true
+clone_full: true
+disk_format: raw
+cpu_type: host
+scsi_controller: virtio-scsi-single
+boot_order: order=scsi0
+qemu_agent_enabled: true
+
+# Delete behavior used by playbooks/delete-vms.yml.
+delete_force: true
+delete_purge: true
+delete_remove_snippets: true
