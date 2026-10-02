@@ -45,7 +45,6 @@ proxHostProfile = [{
     "ipaddress": "192.168.1.82",
     "portNumber": "8006",
     "proxmoxApiUser": "root@pam",
-    # "proxmoxApiPassword": "Qwerty#1234",
     "proxmoxApiPassword": f"{args.proxpass}",
     "proxmox_node": "homelab-pve",
     "datastoreId": "local-1TB",
@@ -79,6 +78,21 @@ vmProfileName = [{
      }]
 
 
+#### Check input
+
+# max VMs allowed per t-shirt size
+maxVmCount = {"default": 3, "large": 2, "xlarge": 1}
+
+
+def checkInputArgs(profile=args.vmprofile, vmcount=args.vmcount):
+  if vmcount < 0:
+    print(f"vmcount must be >= 0, got {vmcount}")
+    sys.exit(255)
+  if vmcount > maxVmCount[profile]:
+    print(f"only {maxVmCount[profile]} VM(s) can be deployed with a t-shirt of {profile}")
+    sys.exit(255)
+
+
 ###############################################################################
 #                     Select host + VM profiles                               #
 ###############################################################################
@@ -90,14 +104,13 @@ else:
 
 profileIndex = {"default": 0, "large": 1, "xlarge": 2}
 if args.vmprofile not in profileIndex:
-  sys.exit(
-      f"ERROR: unknown vmprofile '{args.vmprofile}' (use default|large|xlarge)")
-
-if args.vmprofile == "default":
+  sys.exit(f"ERROR: unknown vmprofile '{args.vmprofile}' (use default|large|xlarge)")
+checkInputArgs()
+if args.vmprofile in ("default", "large"):
   # vmcount 0 -> one VM numbered 0; vmcount N -> N VMs numbered 1..N
   vmNumbers = range(1, args.vmcount + 1) if args.vmcount >= 1 else [0]
 else:
-  # large/xlarge always produce a single unnumbered VM
+  # xlarge always produces a single unnumbered VM
   vmNumbers = [""]
 
 # keyed by VM id (ubuntu24-lab-testN) to match the "vms:" mapping the playbook expects
