@@ -1,0 +1,126 @@
+---
+- name: Initialize the first Kubernetes control-plane node
+  hosts: k8s_master[0]
+  gather_facts: true
+  become: true
+
+  vars:
+    pod_network_cidr: "10.220.0.0/16"
+    containerd_cri_socket: unix:///var/run/containerd/containerd.sock
+    calico_version: v3.33.0
+    calico_manifest_base_url: >-
+      https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests
+    calico_custom_resources_path: /etc/kubernetes/calico-custom-resources.yaml
+
+  tasks:
+    - name: Read the SSH user's account information
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ ansible_user }}"
+
+    - name: Initialize the Kubernetes control plane
+      ansible.builtin.command:
+        argv:
+          - kubeadm
+          - init
+          - "--cri-socket={{ containerd_cri_socket }}"
+          - "--pod-network-cidr={{ pod_network_cidr }}"
+        creates: /etc/kubernetes/admin.conf
+
+    - name: Create the Kubernetes configuration directory
+      ansible.builtin.file:
+        path: "{{ ansible_facts['getent_passwd'][ansible_user][4] }}/.kube"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_facts['getent_passwd'][ansible_user][2] }}"
+        mode: "0700"
+
+    - name: Install the administrator kubeconfig
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "{{ ansible_facts['getent_passwd'][ansible_user][4] }}/.kube/config"
+        remote_src: true
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_facts['getent_passwd'][ansible_user][2] }}"
+        mode: "0600"
+        backup: true
+
+    - name: Wait for the Kubernetes API server to become ready
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - --raw=/readyz
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: kubernetes_api_ready
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: kubernetes_api_ready.rc == 0
+
+    - name: Install Calico project custom resource definitions
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - --server-side
+          - --force-conflicts
+          - -f
+          - "{{ calico_manifest_base_url }}/v3_projectcalico_org.yaml"
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+
+    - name: Install the Tigera operator
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - --server-side
+          - --force-conflicts
+          - -f
+          - "{{ calico_manifest_base_url }}/tigera-operator.yaml"
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+
+    - name: Wait for Calico operator custom resource definitions
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - wait
+          - --for=condition=Established
+          - --timeout=120s
+          - "customresourcedefinition/{{ item }}"
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      loop:
+        - installations.operator.tigera.io
+        - apiservers.operator.tigera.io
+        - goldmanes.operator.tigera.io
+        - whiskers.operator.tigera.io
+      changed_when: false
+
+    - name: Download Calico custom resources
+      ansible.builtin.get_url:
+        url: "{{ calico_manifest_base_url }}/custom-resources.yaml"
+        dest: "{{ calico_custom_resources_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Configure the Calico pod network CIDR
+      ansible.builtin.replace:
+        path: "{{ calico_custom_resources_path }}"
+        regexp: 'cidr:\s+192\.168\.0\.0/16'
+        replace: "cidr: {{ pod_network_cidr }}"
+        backup: true
+
+    - name: Install Calico custom resources
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - -f
+          - "{{ calico_custom_resources_path }}"
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf

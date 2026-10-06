@@ -1,0 +1,247 @@
+# Prepare k8s nodes with packages and configs
+---
+- name: Install containerd.io from the Docker apt repository
+  hosts: k8s_master:k8s_workers
+  become: true
+  gather_facts: true
+
+  vars:
+    docker_keyring_dir: /etc/apt/keyrings
+    containerd_svc_dir: /etc/containerd
+    containerd_cri_socket: unix:///var/run/containerd/containerd.sock
+    docker_keyring_path: /etc/apt/keyrings/docker.gpg
+    k8s_keyring_path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    k8s_gpg_url: https://pkgs.k8s.io/core:/stable:/v1.37/deb/Release.key
+    k8s_repo_url: https://pkgs.k8s.io/core:/stable:/v1.37/deb/
+    k8s_repo_filename: kubernetes
+    docker_gpg_url: https://download.docker.com/linux/ubuntu/gpg
+    docker_repo_url: https://download.docker.com/linux/ubuntu
+    docker_repo_filename: docker
+    k8s_packages:
+      - kubelet
+      - kubeadm
+      - kubectl
+      - cri-tools
+    prereq_packages:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg
+    kubernetes_kernel_modules:
+      - overlay
+      - br_netfilter
+    kubernetes_sysctl_settings:
+      net.bridge.bridge-nf-call-iptables: "1"
+      net.bridge.bridge-nf-call-ip6tables: "1"
+      net.ipv4.ip_forward: "1"
+
+  handlers:
+    - name: Restart containerd
+      ansible.builtin.service:
+        name: containerd
+        state: restarted
+
+  tasks:
+    - name: Verify the host is running Ubuntu
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['distribution'] == 'Ubuntu'
+        fail_msg: >-
+          This play configures the Ubuntu Docker apt repository and cannot run
+          on {{ ansible_facts['distribution'] }}.
+
+    - name: Disable swap for the running system
+      ansible.builtin.command: swapoff -a
+      when: ansible_facts['swaptotal_mb'] | int > 0
+      become: true
+
+    - name: Comment out swap entries in /etc/fstab
+      ansible.builtin.replace:
+        path: /etc/fstab
+        regexp: '^([^#].*\sswap\s.*)$'
+        replace: '# \1'
+        backup: true
+      become: true
+
+    - name: Persist required Kubernetes kernel modules
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/kubernetes.conf
+        content: "{{ kubernetes_kernel_modules | join('\n') }}\n"
+        owner: root
+        group: root
+        mode: "0644"
+      become: true
+
+    - name: Load required Kubernetes kernel modules
+      ansible.builtin.command: "modprobe {{ item }}"
+      loop: "{{ kubernetes_kernel_modules }}"
+      changed_when: false
+      become: true
+
+    - name: Persist required Kubernetes sysctl settings
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/99-kubernetes.conf
+        content: |-
+          {% for key, value in kubernetes_sysctl_settings.items() %}
+          {{ key }} = {{ value }}
+          {% endfor %}
+        owner: root
+        group: root
+        mode: "0644"
+      become: true
+
+    - name: Apply required Kubernetes sysctl settings
+      ansible.builtin.command: "sysctl -w {{ item.key }}={{ item.value }}"
+      loop: "{{ kubernetes_sysctl_settings | dict2items }}"
+      changed_when: false
+      become: true
+
+    - name: Install prerequisite packages
+      ansible.builtin.apt:
+        name: "{{ prereq_packages }}"
+        state: present
+        update_cache: true
+      become: true
+
+    - name: Create keyrings directory
+      ansible.builtin.file:
+        path: "{{ docker_keyring_dir }}"
+        state: directory
+        mode: "0755"
+      become: true
+
+    - name: Download and dearmor Docker GPG key
+      ansible.builtin.shell: >
+        curl -fsSL {{ docker_gpg_url }} | gpg --dearmor -o {{ docker_keyring_path }}
+      args:
+        creates: "{{ docker_keyring_path }}"
+      become: true
+
+    - name: Set Docker GPG key permissions
+      ansible.builtin.file:
+        path: "{{ docker_keyring_path }}"
+        mode: "0644"
+      become: true
+
+    - name: Get dpkg architecture
+      ansible.builtin.command: dpkg --print-architecture
+      register: dpkg_arch
+      changed_when: false
+
+    - name: Add Docker apt repository
+      ansible.builtin.deb822_repository:
+        name: "{{ docker_repo_filename }}"
+        types: deb
+        uris: "{{ docker_repo_url }}"
+        suites: "{{ ansible_facts['distribution_release'] }}"
+        components: stable
+        architectures: "{{ dpkg_arch.stdout }}"
+        signed_by: "{{ docker_keyring_path }}"
+        state: present
+        install_python_debian: true
+      become: true
+
+    - name: Download and dearmor Kubernetes GPG key
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -fsSL {{ k8s_gpg_url }} | gpg --dearmor -o {{ k8s_keyring_path }}
+      args:
+        creates: "{{ k8s_keyring_path }}"
+        executable: /bin/bash
+      become: true
+
+    - name: Set Kubernetes GPG key permissions
+      ansible.builtin.file:
+        path: "{{ k8s_keyring_path }}"
+        mode: "0644"
+      become: true
+
+    - name: Add Kubernetes apt repository
+      ansible.builtin.deb822_repository:
+        name: "{{ k8s_repo_filename }}"
+        types: deb
+        uris: "{{ k8s_repo_url }}"
+        suites: "/"
+        architectures: "{{ dpkg_arch.stdout }}"
+        signed_by: "{{ k8s_keyring_path }}"
+        state: present
+        install_python_debian: true
+      become: true
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+      become: true
+
+    - name: Install containerd.io
+      ansible.builtin.apt:
+        name: containerd.io
+        state: present
+      become: true
+
+    - name: Create containerd service directory
+      ansible.builtin.file:
+        path: "{{ containerd_svc_dir }}"
+        state: directory
+        mode: "0755"
+      become: true
+
+    - name: Read the default containerd configuration
+      ansible.builtin.command: containerd config default
+      register: containerd_default_config
+      changed_when: false
+      become: true
+
+    - name: Install the default containerd configuration
+      ansible.builtin.copy:
+        dest: "{{ containerd_svc_dir }}/config.toml"
+        content: |-
+          {{
+            containerd_default_config.stdout
+            | regex_replace(
+                '(?m)^(\s*SystemdCgroup\s*=\s*)false\s*$',
+                '\1true'
+              )
+          }}
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+      notify: Restart containerd
+      become: true
+
+    - name: Start and enable containerd service
+      ansible.builtin.service:
+        name: containerd
+        state: started
+        enabled: yes
+      become: true
+
+    - name: Apply pending containerd configuration changes
+      ansible.builtin.meta: flush_handlers
+
+    - name: Install Kubernetes packages
+      ansible.builtin.apt:
+        name: "{{ k8s_packages }}"
+        state: present
+      become: true
+
+    - name: Hold Kubernetes packages at their installed versions
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: "{{ k8s_packages }}"
+      become: true
+
+    - name: Verify the containerd CRI v1 endpoint
+      ansible.builtin.command:
+        argv:
+          - crictl
+          - "--runtime-endpoint={{ containerd_cri_socket }}"
+          - info
+      register: containerd_cri_info
+      changed_when: false
+      retries: 5
+      delay: 2
+      until: containerd_cri_info.rc == 0
+      become: true

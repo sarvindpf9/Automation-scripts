@@ -1,0 +1,36 @@
+---
+- name: Generate the Kubernetes worker join command
+  hosts: k8s_master[0]
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Generate the kubeadm worker join command
+      ansible.builtin.command:
+        argv:
+          - kubeadm
+          - token
+          - create
+          - --print-join-command
+      register: kubeadm_worker_join
+      no_log: true
+
+- name: Join worker nodes to the Kubernetes cluster
+  hosts: k8s_workers
+  gather_facts: false
+  become: true
+
+  vars:
+    containerd_cri_socket: unix:///var/run/containerd/containerd.sock
+    control_plane_host: "{{ groups['k8s_master'] | first }}"
+
+  tasks:
+    - name: Join the worker to the Kubernetes cluster
+      ansible.builtin.command:
+        argv: >-
+          {{
+            hostvars[control_plane_host]['kubeadm_worker_join']['stdout'].split()
+            + ['--cri-socket=' ~ containerd_cri_socket]
+          }}
+        creates: /etc/kubernetes/kubelet.conf
+      no_log: true

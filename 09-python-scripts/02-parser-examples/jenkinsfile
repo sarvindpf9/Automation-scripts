@@ -1,0 +1,45 @@
+pipeline {
+    agent any
+
+    stages {
+        stage('run git clone') {
+            steps {
+                dir('/var/lib/jenkins/projects/git-local/') {
+                    git branch: 'main',
+                        credentialsId: '82647177-294e-44b7-91b4-75ffdd96d164',
+                        url: 'git@github.com:eccentrichead/homelab-project.git'
+                }
+            }
+        }
+        stage('Generate ansible var file sample') {
+            steps {
+                dir('/var/lib/jenkins/projects/git-local/01-jenkins-artifacts/python/') {
+                    withCredentials([
+                        string(credentialsId: 'prox_pass', variable: 'CLOUD_PASSWORD'),
+                        string(credentialsId: 'cloudinit_u24', variable: 'CLOUD_INIT_USER_PASSWORD')
+                    ]) {
+                        sh '''
+                            set -eu
+                            python3 input-parser.py \
+                                -hostname $prox_host \
+                                -username $username \
+                                -proxpass "$CLOUD_PASSWORD" \
+                                -vmprofile $flavor \
+                                -vmcount $vmcount
+                        '''
+                    }
+                }
+            }
+        }
+        stage('print the config var data') {
+            steps {
+                dir('/var/lib/jenkins/projects/git-local/01-jenkins-artifacts/') {
+                    sh'''
+                       mv python/vm-config.yml .
+                       cat vm-config.yml
+                    '''
+                }
+            }
+        }
+    }
+}
