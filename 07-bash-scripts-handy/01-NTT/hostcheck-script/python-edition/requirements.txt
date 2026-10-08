@@ -1,0 +1,5 @@
+setuptools
+python-openstackclient
+requests
+reportlab
+rich

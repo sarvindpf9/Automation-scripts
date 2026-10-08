@@ -526,7 +526,7 @@ check_lvm_filters() {
         GLOBAL_FILTER=$(grep -E '^\s*global_filter\s*=' "$LVM_CONF" 2>/dev/null || true)
         [[ -n "$FILTER" ]]        && OK "filter:        $FILTER"
         [[ -n "$GLOBAL_FILTER" ]] && OK "global_filter: $GLOBAL_FILTER"
-        [[ -z "$FILTER" && -z "$GLOBAL_FILTER" ]] && FAIL "No filter or global_filter set in lvm.conf"
+        [[ -z "$FILTER" && -z "$GLOBAL_FILTER" ]] && WARN "No filter or global_filter set in lvm.conf"
     else
         FAIL "lvm.conf not found"
     fi
@@ -540,6 +540,16 @@ check_hosts() {
     printf '  %b[ NOTE ]%b  Review and Ensure the required host record (like netapp SVM IP etc) mapping is set for the SVM FQDN to be resolvable\n' "$RED" "$NC"
     INFO ""
     while IFS= read -r line; do INFO "$line"; done < /etc/hosts
+}
+
+check_fstab() {
+    if [[ ! -r /etc/fstab ]]; then
+        FAIL "/etc/fstab not readable"
+        return
+    fi
+    OK "/etc/fstab is readable"
+    INFO ""
+    while IFS= read -r line || [[ -n "$line" ]]; do INFO "$line"; done < /etc/fstab
 }
 
 check_group_consistency() {
@@ -698,18 +708,12 @@ check_pf9_packages() {
             check_package_alternatives "Open vSwitch service" openvswitch-switch
             check_package_alternatives "OVN common files" ovn-common
             check_package_alternatives "OVN host" ovn-host
-            check_package_alternatives "Python Open vSwitch bindings" python3-openvswitch
             ;;
         rpm)
             # Package names vary with the enabled EL/PF9 repository. Check the
             # required installed executables and report their actual RPM owners.
             check_command_provider "Open vSwitch" ovs-vsctl
             check_command_provider "OVN host controller" ovn-controller
-            if python3 -c 'import ovs' >/dev/null 2>&1; then
-                OK "Python Open vSwitch bindings  (module: ovs)"
-            else
-                FAIL "Python Open vSwitch bindings  (python3 module 'ovs' unavailable)"
-            fi
             ;;
     esac
 
@@ -1284,6 +1288,7 @@ else
     health_check "OVS BRIDGES"         check_ovs_bridges
 
     health_check "/ETC/HOSTS entries"              check_hosts
+    health_check "/ETC/FSTAB entries"              check_fstab
     health_check "VIRSH LIVENESS"          check_virsh_responsiveness
     health_check "GROUP CONSISTENCY (local /etc/group consistency check)"       check_group_consistency
     health_check "RSYSLOG PF9 RULES"        check_rsyslog_pf9_rules
