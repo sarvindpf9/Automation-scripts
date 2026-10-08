@@ -1109,15 +1109,13 @@ def build_parser() -> argparse.ArgumentParser:
     output_group.add_argument("--output", type=Path, help="write a plain-text report")
     parser.add_argument(
         "--pdf",
-        type=Path,
-        metavar="FILE",
-        help="write a color-coded PDF report to FILE",
+        action="store_true",
+        help="write a timestamped color-coded PDF report",
     )
     parser.add_argument(
         "--json",
-        type=Path,
-        metavar="FILE",
-        help="write a machine-parseable JSON report to FILE",
+        action="store_true",
+        help="write a timestamped machine-parseable JSON report",
     )
     return parser
 
@@ -1167,7 +1165,7 @@ def status_text(status: str) -> Text:
 def comparison_table(row: CheckResult) -> Table:
     """Render actual and expected values as a color-coded nested table."""
 
-    table = Table(box=box.ROUNDED, show_header=True, expand=True, padding=(0, 1))
+    table = Table(box=box.ROUNDED, show_header=True, padding=(0, 1))
     table.add_column("Actual", overflow="fold")
     table.add_column("Expected", overflow="fold")
     actual_styles = {
@@ -1186,7 +1184,12 @@ def comparison_table(row: CheckResult) -> Table:
 def render_section(console: Console, title: str, rows: Iterable[CheckResult]) -> None:
     """Render one rounded Rich table."""
 
-    table = Table(title=title, box=box.ROUNDED, show_lines=True, expand=True)
+    table = Table(
+        title=title,
+        title_justify="left",
+        box=box.ROUNDED,
+        show_lines=True,
+    )
     table.add_column("Check", style="bold cyan", no_wrap=True, ratio=1)
     table.add_column("Status", justify="center", no_wrap=True, width=8)
     table.add_column("Output", overflow="fold", ratio=3)
@@ -1194,6 +1197,7 @@ def render_section(console: Console, title: str, rows: Iterable[CheckResult]) ->
         output = comparison_table(row) if row.expected is not None else row.output or "-"
         table.add_row(row.name, status_text(row.status), output)
     console.print(table)
+    console.print()
 
 
 def render_report_metadata(
@@ -1205,14 +1209,15 @@ def render_report_metadata(
 
     table = Table(
         title="hostInfo-check",
+        title_justify="left",
         box=box.ROUNDED,
         show_header=True,
-        expand=True,
     )
     table.add_column("Host Name", style="bold cyan", ratio=1)
     table.add_column("Report Time", style="bold", ratio=1)
     table.add_row(host_name, generated_at.strftime("%Y-%m-%d %H:%M:%S %Z"))
     console.print(table)
+    console.print()
 
 
 def pdf_paragraph_text(value: str) -> str:
@@ -1582,8 +1587,11 @@ def run_selected_checks(
 ) -> list[tuple[str, list[CheckResult]]]:
     """Apply the Bash script's check-selection behavior."""
 
-    reports = [("ENVIRONMENT", check_environment(operating_system))]
     actions = set(arguments.actions)
+    if actions == {"check-sudoers"}:
+        return [("PASSWORDLESS SUDO", check_sudoers())]
+
+    reports = [("ENVIRONMENT", check_environment(operating_system))]
     standalone = actions & {
         "check-mpath-orphan",
         "list-vm-mpath",
@@ -1634,13 +1642,17 @@ def main() -> int:
     parser = build_parser()
     arguments = parser.parse_args(normalize_legacy_arguments(sys.argv[1:]))
     arguments.actions = validate_actions(parser, arguments.actions)
+    sudoers_only = arguments.actions == ["check-sudoers"]
 
     console = Console(record=True)
     host_name = socket.gethostname().split(".")[0]
     generated_at = dt.datetime.now().astimezone()
     try:
-        operating_system = detect_operating_system()
-        reports = run_selected_checks(arguments, operating_system)
+        if sudoers_only:
+            reports = [("PASSWORDLESS SUDO", check_sudoers())]
+        else:
+            operating_system = detect_operating_system()
+            reports = run_selected_checks(arguments, operating_system)
     except RuntimeError as error:
         render_section(
             console,
@@ -1649,7 +1661,8 @@ def main() -> int:
         )
         return 2
 
-    render_report_metadata(console, host_name, generated_at)
+    if not sudoers_only:
+        render_report_metadata(console, host_name, generated_at)
     for title, rows in reports:
         render_section(console, title, rows)
 
@@ -1666,7 +1679,8 @@ def main() -> int:
         console.print(f"Report written to [cyan]{text_destination}[/cyan]")
 
     if arguments.pdf:
-        pdf_destination = timestamped_path(arguments.pdf, generated_at)
+        timestamp = generated_at.strftime("%Y%m%d_%H%M%S")
+        pdf_destination = Path(f"hostcheck-{host_name}-{timestamp}.pdf")
         try:
             write_pdf_report(
                 pdf_destination,
@@ -1682,7 +1696,8 @@ def main() -> int:
         console.print(f"PDF report written to [cyan]{pdf_destination}[/cyan]")
 
     if arguments.json:
-        json_destination = timestamped_path(arguments.json, generated_at)
+        timestamp = generated_at.strftime("%Y%m%d_%H%M%S")
+        json_destination = Path(f"hostcheck-{host_name}-{timestamp}.json")
         try:
             write_json_report(
                 json_destination,
