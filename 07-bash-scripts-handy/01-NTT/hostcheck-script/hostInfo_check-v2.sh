@@ -377,6 +377,53 @@ check_iscsi_initiator() {
     fi
 }
 
+check_fc_ports() {
+    local fc_hosts=(/sys/class/fc_host/host*)
+
+    # Unmatched glob stays literal when no FC HBA is present
+    if [[ ! -e "${fc_hosts[0]}" ]]; then
+        WARN "No FC ports found on this node (/sys/class/fc_host/host* absent)"
+        return
+    fi
+
+    local host_path host_name attr value
+    local -a missing
+    for host_path in "${fc_hosts[@]}"; do
+        host_name=$(basename "$host_path")
+        local -A fc_vals=()
+        missing=()
+
+        # port_state, speed and fabric_name must be present and non-empty;
+        # "unknown" is treated as not reported. 2>/dev/null: attribute may not exist.
+        for attr in port_name node_name port_state speed fabric_name; do
+            value=$(cat "$host_path/$attr" 2>/dev/null || true)
+            fc_vals[$attr]="$value"
+            case "$attr" in
+                port_state|speed|fabric_name)
+                    if [[ -z "$value" || "${value,,}" == "unknown" ]]; then
+                        missing+=("$attr")
+                    fi
+                    ;;
+            esac
+        done
+
+        INFO "=== $host_path ==="
+        INFO "WWPN       : ${fc_vals[port_name]:-<not reported>}"
+        INFO "WWNN       : ${fc_vals[node_name]:-<not reported>}"
+        INFO "Port State : ${fc_vals[port_state]:-<not reported>}"
+        INFO "Speed      : ${fc_vals[speed]:-<not reported>}"
+        INFO "Fabric Name: ${fc_vals[fabric_name]:-<not reported>}"
+
+        if [[ ${#missing[@]} -gt 0 ]]; then
+            FAIL "$host_name: FC port present but missing: ${missing[*]}"
+        elif [[ "${fc_vals[port_state]}" != "Online" ]]; then
+            WARN "$host_name: port state is ${fc_vals[port_state]} (expected: Online)"
+        else
+            OK "$host_name: FC port online"
+        fi
+    done
+}
+
 check_iscsid_conf() {
     if ! command -v iscsid >/dev/null 2>&1; then
         WARN "iscsid not installed — skipping iscsid.conf check"
@@ -1280,6 +1327,7 @@ else
     health_check "PACKAGES"            check_packages
     health_check "SERVICES"            check_services
     health_check "ISCSI INITIATOR (to be referred for iSCSI backend)"     check_iscsi_initiator
+    health_check "FC PORTS (to be referred for FC backend)"     check_fc_ports
     health_check "ISCSID CONF"         check_iscsid_conf
     health_check "MULTIPATH BLACKLIST"  check_multipath_blacklist
     health_check "LVM FILTERS"         check_lvm_filters

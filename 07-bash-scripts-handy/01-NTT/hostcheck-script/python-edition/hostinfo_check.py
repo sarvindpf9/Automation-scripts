@@ -427,13 +427,16 @@ def check_bond() -> list[CheckResult]:
         if len(fields) >= 2:
             interfaces.append(fields[1].split("@")[0])
     if not interfaces:
-        return [result("Bond interfaces", "FAIL", "no bond interfaces found")]
+        return [result("Bond interfaces", "WARN", "no bond interfaces found")]
 
     rows: list[CheckResult] = []
     for interface in interfaces:
         content = read_text(Path("/proc/net/bonding") / interface) or ""
         mode_match = re.search(r"^Bonding Mode:\s*(.*)$", content, re.MULTILINE)
         mode = mode_match.group(1) if mode_match else "unknown"
+        slave_interfaces = re.findall(
+            r"^Slave Interface:\s*(\S+)", content, re.MULTILINE
+        )
         address = run_command(
             ["ip", "-4", "-o", "addr", "show", "dev", interface, "scope", "global"]
         )
@@ -442,7 +445,8 @@ def check_bond() -> list[CheckResult]:
             result(
                 interface,
                 "OK" if "802.3ad" in mode else "WARN",
-                f"mode: {mode}; IP: {', '.join(addresses) or 'none'}",
+                f"mode: {mode}; slaves: {', '.join(slave_interfaces) or 'none'}; "
+                f"IP: {', '.join(addresses) or 'none'}",
             )
         )
     return rows
@@ -522,6 +526,54 @@ def check_iscsi_initiator() -> list[CheckResult]:
         rows.append(result("iSCSI sessions", "OK", sessions.stdout))
     else:
         rows.append(result("iSCSI sessions", "WARN", "no active sessions"))
+    return rows
+
+
+def check_fc_ports() -> list[CheckResult]:
+    """Report Fibre Channel port identity, state, speed, and fabric details."""
+
+    fc_hosts = sorted(Path("/sys/class/fc_host").glob("host*"))
+    if not fc_hosts:
+        return [
+            result(
+                "FC ports",
+                "WARN",
+                "no FC ports found on this node (/sys/class/fc_host/host* absent)",
+            )
+        ]
+
+    attributes = {
+        "WWPN": "port_name",
+        "WWNN": "node_name",
+        "Port State": "port_state",
+        "Speed": "speed",
+        "Fabric Name": "fabric_name",
+    }
+    rows: list[CheckResult] = []
+    for host_path in fc_hosts:
+        values = {
+            label: (read_text(host_path / attribute) or "").strip()
+            for label, attribute in attributes.items()
+        }
+        missing = [
+            label
+            for label, value in values.items()
+            if not value or value.casefold() == "unknown"
+        ]
+        if missing:
+            status = "FAIL"
+        elif values["Port State"].casefold() != "online":
+            status = "WARN"
+        else:
+            status = "OK"
+
+        details = "; ".join(
+            f"{label}: {value or '<not reported>'}"
+            for label, value in values.items()
+        )
+        if missing:
+            details = f"{details}; missing: {', '.join(missing)}"
+        rows.append(result(host_path.name, status, details))
     return rows
 
 
@@ -1621,6 +1673,7 @@ def run_selected_checks(
             ("PACKAGES", check_packages(operating_system)),
             ("SERVICES", check_services()),
             ("ISCSI INITIATOR", check_iscsi_initiator()),
+            ("FC PORTS", check_fc_ports()),
             ("ISCSID CONF", check_iscsid_conf()),
             ("MULTIPATH BLACKLIST", check_multipath_blacklist()),
             ("LVM FILTERS", check_lvm_filters()),

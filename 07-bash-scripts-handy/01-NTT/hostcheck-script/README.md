@@ -8,7 +8,7 @@ Local health-check utility for supported Platform9 KVM compute hosts.
 
 `hostInfo_check-v2.sh` inspects the local host's operating system, networking, time synchronization, storage configuration, Platform9 packages and services, libvirt state, and supporting system configuration. It does not modify host configuration, but some checks print complete configuration or account records and therefore its output should be handled as operationally sensitive.
 
-<!-- The output can contain hostnames, IP addresses, iSCSI initiator IQNs, VM UUIDs, account records, storage identifiers, and configuration-file contents. Review and redact logs before sharing them. -->
+<!-- The output can contain hostnames, IP addresses, iSCSI initiator IQNs, FC WWPN/WWNN/fabric names, VM UUIDs, account records, storage identifiers, and configuration-file contents. Review and redact logs before sharing them. -->
 
 **Dependencies (local):**
 
@@ -93,6 +93,7 @@ The following checks run when no standalone selector is supplied:
 | Host packages | Checks the distribution-appropriate SCSI, multipath, iSCSI, and NFS client packages or commands. |
 | Core services | Checks whether `iscsid` and `multipathd` are installed and active. |
 | iSCSI initiator | Reads `/etc/iscsi/initiatorname.iscsi`, reports the initiator name, and lists active iSCSI sessions when `iscsid` is running. |
+| FC ports | Reads each `/sys/class/fc_host/host*` and prints WWPN, WWNN, port state, speed, and fabric name. Warns when no FC port is present. Fails for a port whose state, speed, or fabric name is empty or `unknown`. Warns when a fully reported port state is not `Online`. |
 | iSCSI configuration | Checks five timeout settings in `/etc/iscsi/iscsid.conf`: replacement `15`, login `5`, logout `5`, abort `10`, and LU reset `20`. |
 | Multipath configuration | Requires `/etc/multipath.conf`; expects `checker_timeout 15`, reports blacklist entries, validates the NETAPP device stanza, and prints the complete file. |
 | LVM filters | Reports configured `filter` and `global_filter` entries from `/etc/lvm/lvm.conf`. |
@@ -139,7 +140,7 @@ sudo ./hostInfo_check-v2.sh \
 
 ### Sensitive output
 
-The report can include hostnames, IP addresses, iSCSI initiator names and sessions, multipath identifiers and full stanzas, VM names and UUIDs, `/etc/hosts`, Platform9 configuration files, sudoers matches, and local account entries. Review and redact the output before attaching it to tickets or sharing it outside the authorized operations team.
+The report can include hostnames, IP addresses, iSCSI initiator names and sessions, FC WWPN/WWNN/fabric names, multipath identifiers and full stanzas, VM names and UUIDs, `/etc/hosts`, Platform9 configuration files, sudoers matches, and local account entries. Review and redact the output before attaching it to tickets or sharing it outside the authorized operations team.
 
 ---
 
@@ -197,7 +198,6 @@ Extract `hostcheck-install.tar.gz` into a dedicated directory and run the instal
 
 ```bash
 # Extract the host-check installation bundle
-mkdir -p hostcheck-install
 tar -xzf hostcheck-install.tar.gz -C hostcheck-install
 cd hostcheck-install
 
