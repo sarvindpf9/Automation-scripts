@@ -1147,6 +1147,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--virsh", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--uuid", help="check one virsh VM and its multipath disks")
     parser.add_argument(
+        "--all-optional",
+        action="store_true",
+        help=(
+            "run all optional checks except the passwordless sudo user listing; "
+            "results are included in requested log, JSON, and PDF reports"
+        ),
+    )
+    parser.add_argument(
         "--glance-mount-dir",
         type=Path,
         default=DEFAULT_GLANCE_MOUNT,
@@ -1640,7 +1648,7 @@ def run_selected_checks(
     """Apply the Bash script's check-selection behavior."""
 
     actions = set(arguments.actions)
-    if actions == {"check-sudoers"}:
+    if actions == {"check-sudoers"} and not arguments.all_optional:
         return [("PASSWORDLESS SUDO", check_sudoers())]
 
     reports = [("ENVIRONMENT", check_environment(operating_system))]
@@ -1649,21 +1657,30 @@ def run_selected_checks(
         "list-vm-mpath",
         "check-glance-mount",
     }
+    if arguments.all_optional:
+        standalone.update(
+            {
+                "check-mpath-orphan",
+                "list-vm-mpath",
+                "check-glance-mount",
+            }
+        )
     if standalone:
-        if "check-mpath-orphan" in actions:
+        if "check-mpath-orphan" in standalone:
             reports.append(("MULTIPATH ORPHANS", check_multipath_orphans()))
-        if "list-vm-mpath" in actions:
+        if "list-vm-mpath" in standalone:
             reports.append(("VM DISK MULTIPATH", check_vm_disk_multipath()))
-        if "check-glance-mount" in actions:
+        if "check-glance-mount" in standalone:
             reports.append(
                 ("GLANCE IMAGE MOUNT", check_glance_mount(arguments.glance_mount_dir))
             )
-        return reports
+        if not arguments.all_optional:
+            return reports
     if arguments.uuid:
         reports.append(("VIRSH VM", check_virsh_vm(arguments.uuid)))
         return reports
 
-    if "check-sudoers" in actions:
+    if "check-sudoers" in actions and not arguments.all_optional:
         reports.append(("PASSWORDLESS SUDO", check_sudoers()))
     reports.extend(
         [
@@ -1695,7 +1712,9 @@ def main() -> int:
     parser = build_parser()
     arguments = parser.parse_args(normalize_legacy_arguments(sys.argv[1:]))
     arguments.actions = validate_actions(parser, arguments.actions)
-    sudoers_only = arguments.actions == ["check-sudoers"]
+    sudoers_only = (
+        arguments.actions == ["check-sudoers"] and not arguments.all_optional
+    )
 
     console = Console(record=True)
     host_name = socket.gethostname().split(".")[0]

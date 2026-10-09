@@ -1,195 +1,172 @@
-# Automation Scripts
+# python-edition
 
-A collection of scripts and automation tooling for day-to-day infrastructure operations, covering Terraform, Ansible, Python, Packer, Bash utilities, and AI agent tooling.
-
-> **Note:** Scripts in this repo are actively maintained and subject to frequent changes. Test before use in production.
+Python edition of the local Platform9 host health-check utility.
 
 ---
 
-## Repository Structure
+## `hostinfo_check.py`
 
-### [01-terraform-labs](01-terraform-labs/)
+`hostinfo_check.py` is the Python edition of the local Platform9 host health check. It provides structured terminal output and can write timestamped plain-text, PDF, and JSON reports without modifying host configuration.
 
-Terraform/OpenTofu lab configurations for deploying workloads on OpenStack/PCD and Proxmox environments.
+<!-- Reports can contain hostnames, IP addresses, iSCSI initiator IQNs, VM names and UUIDs, account records, storage identifiers, and complete configuration-file contents. Review and redact generated files before sharing them. -->
 
-| Directory | Purpose | README |
-| --------- | ------- | ------ |
-| `01-deploy_bulk-workload` | Bulk OpenStack instance deployment | [README](01-terraform-labs/01-deploy_bulk-workload/README.md) |
-| `02-deploy-instance_E2E` | End-to-end single instance deployment (image, network, volume) | [README](01-terraform-labs/02-deploy-instance_E2E/README.md) |
-| `03-proxmox-deploy-vm` | Deploy Ubuntu 24 VMs on Proxmox VE via template clone, cloud-init, and Ansible inventory generation | [README](01-terraform-labs/03-proxmox-deploy-vm/README.md) |
-| `05-NTT/multi-cluster-aggregate` | Deploy OpenStack instances pinned to a host aggregate using a private custom flavor | [README](01-terraform-labs/05-NTT/multi-cluster-aggregate/README.md) |
+**Dependencies (local):**
 
-### [02-Ansible-scripts](02-Ansible-scripts/)
+- Python 3.9 or newer; the script uses built-in generic type annotations such as `list[str]`
+- Python packages from `requirements.txt`: `setuptools`, `python-openstackclient`, `requests`, `reportlab`, and `rich`
+- A readable `/etc/os-release`; supported OS IDs are `ubuntu`, `rocky`, `rhel`, and `almalinux`
+- `dpkg-query` on Ubuntu or `rpm` on Rocky Linux, RHEL, and AlmaLinux
+- Host utilities used by individual checks, including `ip`, `timedatectl`, `systemctl`, `grpck`, `getent`, `iscsiadm`, `multipath`, `ovs-vsctl`, `virsh`, `readlink`, and `stat`
+- Root or equivalent read access is recommended because the checks inspect system, Platform9, libvirt, multipath, iSCSI, sudoers, account, `/etc/hosts`, and `/etc/fstab` data
 
-Ansible playbooks and automation for OpenStack instance management, host configuration, and platform preparation.
+**What it does:**
 
-| Directory | Purpose | README |
-| --------- | ------- | ------ |
-| `01-example_instance_E2E` | End-to-end OpenStack instance deployment via Ansible | [README](02-Ansible-scripts/01-example_instance_E2E/README.md) |
-| `02-instance-deploy-rollout` | Bulk Nova instance deploy/teardown with configurable storage backend, AZ, and flavor pre-step | [README](02-Ansible-scripts/02-instance-deploy-rollout/README.md) |
-| `03-prepare-CE-VMs` | Renders static netplan config for CE VMs/bare-metal, disables DHCP on a second interface, adds NFS mounts | [README](02-Ansible-scripts/03-prepare-CE-VMs/README.md) |
-| `04-glance-isolated-cluster` | Configures local Glance access on PF9 hosts running `pf9-glance-api` | [README](02-Ansible-scripts/04-glance-isolated-cluster/README.md) |
-| `05-host-check-templates/01-host-healthcheck` | Audits Linux host health (sysctl params, NTP), reports per-host OK/WARN without modifying state | [README](02-Ansible-scripts/05-host-check-templates/01-host-healthcheck/README.md) |
-| `06-proxmox-VM-create` | Proxmox VM clone automation with cloud-init, VLAN-aware NICs, and inventory-driven VM definitions | [README](02-Ansible-scripts/06-proxmox-VM-create/README.md) |
+1. Detects the operating system and selects Debian or RPM package queries.
+2. Runs the full host-check suite, selected standalone storage checks, or a single VM check.
+3. Displays each result as `OK`, `WARN`, `FAIL`, `INFO`, or `ERROR` in a Rich terminal table.
+4. Prints `/etc/hosts` and `/etc/fstab`, reports an unset LVM `filter`/`global_filter` as a warning, and checks the Open vSwitch/OVN packages or command providers required by the host checks.
+5. Optionally creates timestamped plain-text, PDF, and JSON reports.
 
-### [02-deploy-instance_E2E](02-deploy-instance_E2E/)
+### Ubuntu setup
 
-Standalone OpenTofu configuration for deploying a single Nova instance end-to-end including optional Glance image upload and Cinder volume attachment.
-
-See [README](02-deploy-instance_E2E/README.md) for usage details.
-
-### [03-python_deployment_automation](03-python_deployment_automation/)
-
-Python scripts for OpenStack instance lifecycle management.
-
-- `create_instance_e2e.py` — end-to-end instance creation via OpenStack SDK
-- `modules/` — reusable helper modules
-
-See [README](03-python_deployment_automation/README.md) for usage details.
-
-### [05-Other_scripts](05-Other_scripts/)
-
-Miscellaneous automation covering MAAS, OpenStack, PCD, and KDU operations.
-
-| Directory / Script | Purpose | README |
-| ------------------ | ------- | ------ |
-| `01-Maas_add_baremetal` | Add baremetal nodes to MAAS | [README](05-Other_scripts/01-Maas_add_baremetal/README.md) |
-| `02-Maas_full_automation` | Full MAAS environment automation | [README](05-Other_scripts/02-Maas_full_automation/README.md) |
-| `03-pcdExpress_latest/pcdExpress_utility` | PCD Express utility scripts and supporting automation | [README](05-Other_scripts/03-pcdExpress_latest/pcdExpress_utility/README.md) |
-| `04-openstack-samples` | OpenStack API/SDK sample scripts | — |
-| `06-KDU-deployer` | KDU deployment automation | — |
-| `07-ansible_plays` | Supplementary Ansible plays | — |
-| `08-Interface_cleanup_script` | Network interface cleanup | — |
-| `09-maas_install_script-updated` | MAAS installation automation | — |
-| `10-run-port-group-script` | Port group configuration | — |
-| `11-get-VM-port-stat-general` | VM port statistics | — |
-| `12-pcd-setup-local` | Local PCD environment setup | — |
-| `13-passwordless_user-create` | Passwordless sudo user provisioning | — |
-| `014-delete-vjb-flavors.py` | Delete VJB flavors from OpenStack | — |
-| `14-pcdexpressV2` | PCDExpress v2 — Python-driven PCD deployment and host onboarding framework | [README](05-Other_scripts/14-pcdexpressV2/README.md) |
-| `15-pcd-maas-with_proxmox_BM` | Combined PCD + MAAS + Proxmox bare-metal automation | [README](05-Other_scripts/15-pcd-maas-with_proxmox_BM/README.md) |
-
-Additional README files:
-
-| Directory | Purpose | README |
-| --------- | ------- | ------ |
-| `02-Maas_full_automation/pcd_ansible-pcd_develop` | PCD Ansible development tree used by the MAAS automation workflow | [README](05-Other_scripts/02-Maas_full_automation/pcd_ansible-pcd_develop/README.md) |
-| `02-Maas_full_automation/pcd_ansible-pcd_develop/ansible-collections-pf9` | PF9 PCD Ansible collection bundled with the MAAS automation workflow | [README](05-Other_scripts/02-Maas_full_automation/pcd_ansible-pcd_develop/ansible-collections-pf9/README.md) |
-| `02-Maas_full_automation/pcd_ansible-pcd_develop/ansible-collections-pf9/plugins` | Plugin directory for the bundled PF9 PCD Ansible collection | [README](05-Other_scripts/02-Maas_full_automation/pcd_ansible-pcd_develop/ansible-collections-pf9/plugins/README.md) |
-| `03-pcdExpress_latest/pcdExpress_utility/ansible-collections-pf9` | PF9 PCD Ansible collection bundled with the PCD Express utility | [README](05-Other_scripts/03-pcdExpress_latest/pcdExpress_utility/ansible-collections-pf9/README.md) |
-| `03-pcdExpress_latest/pcdExpress_utility/ansible-collections-pf9/plugins` | Plugin directory for the PCD Express PF9 Ansible collection | [README](05-Other_scripts/03-pcdExpress_latest/pcdExpress_utility/ansible-collections-pf9/plugins/README.md) |
-| `14-pcdexpressV2/ansible-collections-pf9` | PF9 PCD Ansible collection for PCDExpress v2 | [README](05-Other_scripts/14-pcdexpressV2/ansible-collections-pf9/README.md) |
-| `14-pcdexpressV2/ansible-collections-pf9/plugins` | Plugin directory for the PCDExpress v2 PF9 Ansible collection | [README](05-Other_scripts/14-pcdexpressV2/ansible-collections-pf9/plugins/README.md) |
-| `14-pcdexpressV2/plugins` | PCDExpress v2 plugin directory | [README](05-Other_scripts/14-pcdexpressV2/plugins/README.md) |
-| `15-pcd-maas-with_proxmox_BM/pcd_ansible-pcd_develop` | PCD Ansible development tree used by the PCD + MAAS + Proxmox workflow | [README](05-Other_scripts/15-pcd-maas-with_proxmox_BM/pcd_ansible-pcd_develop/README.md) |
-| `15-pcd-maas-with_proxmox_BM/pcd_ansible-pcd_develop/ansible-collections-pf9` | PF9 PCD Ansible collection bundled with the PCD + MAAS + Proxmox workflow | [README](05-Other_scripts/15-pcd-maas-with_proxmox_BM/pcd_ansible-pcd_develop/ansible-collections-pf9/README.md) |
-| `15-pcd-maas-with_proxmox_BM/pcd_ansible-pcd_develop/ansible-collections-pf9/plugins` | Plugin directory for the bundled PF9 PCD Ansible collection | [README](05-Other_scripts/15-pcd-maas-with_proxmox_BM/pcd_ansible-pcd_develop/ansible-collections-pf9/plugins/README.md) |
-
-### [06-packer](06-packer/)
-
-Packer QEMU/KVM templates for building machine images (qcow2).
-
-| Directory | Purpose | README |
-| --------- | ------- | ------ |
-| `01-windows-image_builder_working` | Windows image build pipeline with VirtIO drivers | [curtin](06-packer/01-windows-image_builder_working/curtin/README.md), [drivers](06-packer/01-windows-image_builder_working/drivers/README.md) |
-| `02-ubuntu-image-builder` | Ubuntu 24.04 LTS qcow2 golden image with `qemu-guest-agent`, custom fstab and hosts entries | [README](06-packer/02-ubuntu-image-builder/README.md) |
-| `03-sample-windows-packer` | Windows qcow2 with optional swtpm (software TPM), curtin hooks, and standalone swtpm lifecycle script | [README](06-packer/03-sample-windows-packer/README.md), [curtin](06-packer/03-sample-windows-packer/curtin/README.md), [drivers](06-packer/03-sample-windows-packer/drivers/README.md) |
-
-`packer_pre_req.sh` — installs Packer, QEMU, and swtpm prerequisites on the build host.
-
-### [07-bash-scripts-handy](07-bash-scripts-handy/)
-
-Handy Bash scripts for host-level diagnostics and health checks.
-
-| Script | Purpose |
-| ------ | ------- |
-| `hostInfo-check.sh` | Host health checker — bond, NTP, packages, iSCSI, multipath, OVS, PF9 services, virsh VM disk/multipath |
-| `ubuntu24-precheck-script.sh` | Pre-flight checks for Ubuntu 24 hosts |
-| `check_orphaned-vol.sh` | Detect orphaned Cinder volumes |
-| `dry_run_orphan_check.sh` | Dry-run version of orphaned volume detection |
-
-**`01-NTT/`** — OpenStack/PCD VM provisioning and KVM multipath diagnostics — [README](07-bash-scripts-handy/01-NTT/README.md)
-
-| Script | Purpose |
-| ------ | ------- |
-| `launch-VM-with-images.sh` | Launch OpenStack VMs with image attachment |
-| `vm-multipath-check.sh` | Check multipath mapping for all running VMs |
-| `vm-mpath-check-uuid.sh` | Check multipath mapping for a specific VM by UUID |
-| `mpath-iscsi-disk-cleanup.sh` | Clean up stale iSCSI/multipath disk mappings |
-| `cdrom-attach-script/` | Attach and detach virtual CD-ROM ISOs to running VMs |
-| `hostcheck-script/` | Host info and health check script bundle |
-| `virsh-cleanup-script/` | Clean up stale virsh domain definitions |
-| `sort-uuids-virsh/` | Sort and reconcile virsh UUIDs |
-
-Additional README files:
-
-| Directory | Purpose | README |
-| --------- | ------- | ------ |
-| `01-NTT/cdrom-attach-script` | Attach and detach virtual CD-ROM ISOs to running VMs | [README](07-bash-scripts-handy/01-NTT/cdrom-attach-script/README.md) |
-| `01-NTT/hostcheck-script` | Host health, sudoers, orphaned multipath, and VM disk mapping checks | [README](07-bash-scripts-handy/01-NTT/hostcheck-script/README.md) |
-| `01-NTT/mpath-iscsi-disk-cleanup.sh` | Report and clean orphaned iSCSI and multipath disk mappings | [README](07-bash-scripts-handy/01-NTT/mpath-iscsi-disk-cleanup.sh/README.md) |
-| `01-NTT/virsh-cleanup-script` | Inspect VM disk mappings and clean up stale virsh domain state | [README](07-bash-scripts-handy/01-NTT/virsh-cleanup-script/README.md) |
-
-**`02-Siemens/`** — KVM/Nova compute tuning audits — [README](07-bash-scripts-handy/02-Siemens/README.md)
-
-| Script | Purpose |
-| ------ | ------- |
-| `kvm-tuning-check-v1.sh` | Comprehensive KVM/Nova tuning audit — kernel variant, CPU isolation, NUMA, IRQ affinity, THP, governor, sysctl, KVM module params |
-| `kvm-tuning-check-v2.sh` | Quick KVM tuning checker — validates GRUB cmdline, CPU governor, energy perf, thermal daemons, I/O scheduler, huge pages, and network tuning across 9 categories |
-
-Additional README files:
-
-| Directory | Purpose | README |
-| --------- | ------- | ------ |
-| `02-Siemens/02-glance-image-mapping` | Check Glance image backend mapping and image placement details | [README](07-bash-scripts-handy/02-Siemens/02-glance-image-mapping/README.md) |
-| `02-Siemens/decomm-cleanup` | Decommission cleanup workflow for stale host and OpenStack artifacts | [README](07-bash-scripts-handy/02-Siemens/decomm-cleanup/README.md) |
-
-#### hostInfo-check.sh usage
+Use Python 3.9 or newer. Ubuntu releases whose default `python3` is older than 3.9 require an organization-approved Python 3.9+ installation before running the installer.
 
 ```bash
-# Run all host checks
-./hostInfo-check.sh <ip> [ip2 ...]
+# Install the Ubuntu prerequisites
+sudo apt-get update
+sudo apt-get install -y python3 python3-venv python3-pip tar
 
-# Check a specific VM's disk and multipath mapping
-./hostInfo-check.sh --uuid <vm-uuid>
-
-# Run all checks including virsh VM
-./hostInfo-check.sh --uuid <vm-uuid> <ip> [ip2 ...]
+# Confirm that the selected interpreter is Python 3.9 or newer
+python3 --version
 ```
 
-### [08-proxmox-automation](08-proxmox-automation/)
+### PF9OS Linux setup
 
-Proxmox hypervisor automation utilities.
+It default comes preinstalled with python `3.12.13`. No extra package to be installed 
 
-| Script | Purpose |
-| ------ | ------- |
-| `oneshot-uuid_reapply.sh` | Resets machine-id, DBus ID, and stale network config on cloned VMs — runs as a one-shot systemd service on first boot |
-| `sample-firstboot-reset.service` | Systemd service unit definition for the machine ID reset |
-| `sample-firstboot-reset.path` | Systemd path unit that triggers the reset on marker file presence |
 
-### [09-python-scripts](09-python-scripts/)
+### Extract the installation bundle
 
-Standalone Python utilities for network and infrastructure operations.
+Extract `hostcheck-install.tar.gz` into a dedicated directory and run the installer from that directory. The extracted files must include `pyenv-install.sh`, `requirements.txt`, and `hostinfo_check.py`.
 
-| Script | Purpose |
-| ------ | ------- |
-| `free-subnet-ip-checker.py` | Scan a subnet and report free (unused) IP addresses — supports ICMP ping and TCP probing, configurable workers and timeout |
+```bash
+# Extract the host-check installation bundle
+tar -xzf hostcheck-install.tar.gz -C hostcheck-tool-install
+cd hostcheck-tool-install
 
-### [claude-automation](claude-automation/)
+# Confirm that all required files are present
+ls -l pyenv-install.sh requirements.txt hostinfo_check.py
+```
 
-Claude and MCP-oriented automation experiments and supporting tooling.
+### Install the Python environment
+- Post extracting the tar file, set execution permission to the `pyenv-install.sh`  script and execute it:
+```
+chmod a+x pyenv-install.sh
+./pyenv-install.sh
+```
 
-| Directory | Purpose | README |
-| --------- | ------- | ------ |
-| `hackathon-mcp-sow` | Platform9 PCD MCP server and supporting docs/tools | [README](claude-automation/hackathon-mcp-sow/README.md) |
+`pyenv-install.sh` creates `/opt/scripts/hostcheck-tool-install/` and `/opt/scripts/hostcheck-tool-install/venv`, upgrades `pip` from `https://pypi.org/simple/`, and installs the packages listed in `requirements.txt`. It requires privileges to create and populate `/opt/scripts/hostcheck-tool-install/` and requires outbound access to PyPI.
 
----
+After installation:
 
-## Requirements
+- The deployed script is `/opt/scripts/hostcheck-tool-install/hostcheck_info.py`.
+- The copied dependency file is `/opt/scripts/hostcheck-tool-install/requirements.txt`.
+- The virtual environment is `/opt/scripts/hostcheck-tool-install/venv`.
+- Re-running the installer invokes `python3 -m venv` on the same environment path and refreshes the Python packages.
+- The installer uses `set -euo pipefail` and stops immediately when a required file, copy operation, virtual-environment creation, or package installation fails.
 
-- **Terraform/OpenTofu** — for `01-terraform-labs` and `02-deploy-instance_E2E`
-- **Python 3** + `python3-openstackclient` — for Python scripts
-- **Ansible** — for playbooks in `02-Ansible-scripts` and `05-Other_scripts/07-ansible_plays`
-- **Packer** + QEMU/KVM — for `06-packer` (run `packer_pre_req.sh` first)
-- Standard Linux tools (`ovs-vsctl`, `multipath`, `iscsiadm`, `virsh`) for `07-bash-scripts-handy`
-- **systemd** — for `08-proxmox-automation` service units
+### Usage
+
+- cd into to the `/opt/scripts/hostcheck-tool-install` directory and source the python environment activate file:
+```
+source venv/bin/activate
+```
+
+```bash
+# Run the full default host-check suite
+./hostinfo_check
+
+# Add the passwordless-sudo check to the full suite
+./hostinfo_check check-sudoers
+
+# Run the standalone multipath-orphan check
+./hostinfo_check check-mpath-orphan
+
+# Inspect multipath devices used by running VMs
+./hostinfo_check list-vm-mpath
+
+# Check the default Glance image-library mount
+./hostinfo_check check-glance-mount
+
+# Check a specified Glance image-library directory
+./hostinfo_check \
+  check-glance-mount \
+  <GLANCE_MOUNT_DIRECTORY>
+
+# Inspect one VM by UUID
+./hostinfo_check --uuid <VM_UUID>
+
+# Create text, PDF, and JSON reports in one run
+./hostinfo_check \
+  --output <TEXT_REPORT_PATH> \
+  --pdf <PDF_REPORT_PATH> \
+  --json <JSON_REPORT_PATH>
+```
+The same commands can be executed without sourcing the venv by following way of calling the script:
+```
+sudo /opt/scripts/venv/bin/python /opt/scripts/./hostinfo_check 
+```
+
+### Options
+
+| Flag | Required | Description |
+| ---- | -------- | ----------- |
+| `check-sudoers` | No | Adds the passwordless-sudo scan to the full default suite. |
+| `check-mpath-orphan` | No | Runs the standalone multipath-orphan check. |
+| `list-vm-mpath` | No | Runs the standalone per-VM multipath check. |
+| `check-glance-mount` | No | Runs the standalone Glance mount check. It accepts an optional positional directory or `--glance-mount-dir`. |
+| `--glance-mount-dir <DIRECTORY>` | No | Sets the Glance mount directory. The default is `/var/opt/imagelibrary`. |
+| `--uuid <VM_UUID>` | No | Runs the single-VM libvirt and multipath check when no standalone storage selector is present. |
+| `--log` | No | Writes `hostcheck-<short-hostname>-<YYYYMMDD_HHMMSS>.log` in the current directory. Mutually exclusive with `--output`. |
+| `--output <FILE>` | No | Writes a timestamped plain-text report derived from `FILE`. Mutually exclusive with `--log`. |
+| `--pdf <FILE>` | No | Writes a timestamped, color-coded PDF report. Requires `reportlab`. |
+| `--json <FILE>` | No | Writes a timestamped, machine-readable JSON report. |
+
+Standalone selectors take precedence over `--uuid` and the full suite. Multiple standalone selectors can be supplied together. `--pdf` and `--json` can be combined with terminal-only output, `--log`, or `--output`.
+
+### Output and exit behaviour
+
+- Requested report filenames receive a `-<YYYYMMDD_HHMMSS>` suffix before their extension.
+- A successful run returns `0` only when no check reports `FAIL` or `ERROR`.
+- A completed report containing at least one `FAIL` or `ERROR` returns `1`.
+- Initialization, report-writing, and dependency errors return `2`.
+- An unset LVM `filter` and `global_filter` is reported as `WARN`; a missing or unreadable `/etc/lvm/lvm.conf` remains `FAIL`.
+- `/etc/fstab` is included in the default report. An unreadable file is reported as `FAIL`.
+
+### Sensitive output
+
+Terminal and generated reports can expose infrastructure and account details. Store report files with access controls appropriate for operational data, and redact them before external sharing.
+
+### Example outputs:
+- help section:
+```
+./hostinfo_check -h
+usage: hostinfo_check.py [-h] [--uuid UUID] [--glance-mount-dir GLANCE_MOUNT_DIR] [--log | --output OUTPUT] [--pdf] [--json] [CHECK ...]
+
+Run Platform9 host readiness and storage checks.
+
+positional arguments:
+  CHECK                 optional standalone check: check-sudoers, check-mpath-orphan, list-vm-mpath, or check-glance-mount (default: None)
+
+options:
+  -h, --help            show this help message and exit
+  --uuid UUID           check one virsh VM and its multipath disks (default: None)
+  --glance-mount-dir GLANCE_MOUNT_DIR
+                        directory used by check-glance-mount (default: /var/opt/imagelibrary)
+  --log                 write a timestamped plain-text copy of the report (default: False)
+  --output OUTPUT       write a plain-text report (default: None)
+  --pdf                 write a timestamped color-coded PDF report (default: False)
+  --json                write a timestamped machine-parseable JSON report (default: False)
+```
+
+- 

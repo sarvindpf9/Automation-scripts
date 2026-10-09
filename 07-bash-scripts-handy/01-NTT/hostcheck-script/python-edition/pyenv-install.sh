@@ -18,7 +18,7 @@ fi
 
 
 echo "copying script files to ${SCRIPTS_DIR} directory"
-cp -r ./hostcheck_info.py ${SCRIPTS_DIR}
+cp -r ./hostinfo_check.py ${SCRIPTS_DIR}/hostinfo_check
 cp -r ./requirements.txt ${SCRIPTS_DIR}
 echo " "
 
@@ -32,6 +32,6 @@ fi
 "${VENV_DIR}/bin/python" -m pip install --index-url "${PYPI_INDEX}" -r "${REQ_FILE}"
 echo " "
 
-echo "the hostcheck_info.py is placed in the ${SCRIPTS_DIR} directory"
+echo "the hostinfo_check.py is placed in the ${SCRIPTS_DIR} directory"
 echo "Run source ${VENV_DIR}/bin/activate before executing the script"
-echo "Run ./hostcheck_info within the ${SCRIPTS_DIR} to fetch the current system assessment information"
+echo "Run ./hostinfo_check within the ${SCRIPTS_DIR} to fetch the current system assessment information"
