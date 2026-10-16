@@ -23,7 +23,7 @@ Python edition of the local Platform9 host health-check utility.
 **What it does:**
 
 1. Detects the operating system and selects Debian or RPM package queries.
-2. Runs the full host-check suite, selected standalone storage checks, or a single VM check.
+2. Runs the full host-check suite, the core storage-only report, selected standalone storage checks, or a single VM check.
 3. Displays each result as `OK`, `WARN`, `FAIL`, `INFO`, or `ERROR` in a Rich terminal table.
 4. Prints `/etc/hosts` and `/etc/fstab`, reports an unset LVM `filter`/`global_filter` as a warning, and checks the Open vSwitch/OVN packages or command providers required by the host checks.
 5. Detects dedicated CPU or hugepage parameters in `/proc/cmdline` and conditionally runs the kernel command-line, CPU-isolation, hugepage-allocation, and IRQ-placement checks. When no matching parameter exists, each section reports that no dedicated CPU or memory configuration was found.
@@ -117,6 +117,16 @@ source venv/bin/activate
 # Run all optional checks, including the complete resource-isolation report
 ./hostinfo_check --all-optional
 
+# Run only the core iSCSI, FC, multipath, and LVM storage checks
+./hostinfo_check --storage-check
+
+# Write the storage-only report as plain text, PDF, and JSON
+./hostinfo_check \
+  --storage-check \
+  --log \
+  --pdf \
+  --json
+
 # Create text, PDF, and JSON reports in one run
 ./hostinfo_check \
   --output <TEXT_REPORT_PATH> \
@@ -140,12 +150,13 @@ sudo /opt/scripts/venv/bin/python /opt/scripts/./hostinfo_check
 | `--uuid <VM_UUID>` | No | Runs the single-VM libvirt and multipath check when no standalone storage selector is present. |
 | `--resource-isolate-settings` | No | Runs only the CPU, hugepage, IRQ, KVM, NIC-passthrough, and Nova resource-isolation report. |
 | `--all-optional` | No | Runs all optional storage checks and the complete resource-isolation report, excluding the passwordless-sudo listing. |
+| `--storage-check` | No | Runs only `ISCSI INITIATOR`, `FC PORTS`, `ISCSID CONF`, `MULTIPATH BLACKLIST`, and `LVM FILTERS`. |
 | `--log` | No | Writes `hostcheck-<short-hostname>-<YYYYMMDD_HHMMSS>.log` in the current directory. Mutually exclusive with `--output`. |
 | `--output <FILE>` | No | Writes a timestamped plain-text report derived from `FILE`. Mutually exclusive with `--log`. |
 | `--pdf` | No | Writes `hostcheck-<short-hostname>-<YYYYMMDD_HHMMSS>.pdf`. Requires `reportlab`. |
 | `--json` | No | Writes `hostcheck-<short-hostname>-<YYYYMMDD_HHMMSS>.json`. |
 
-Standalone selectors take precedence over `--uuid` and the full suite. Multiple standalone selectors can be supplied together. `--resource-isolate-settings` runs only its specific report. `--all-optional` includes the standalone storage checks and the complete resource-isolation report in the full suite. `--pdf` and `--json` can be combined with terminal-only output, `--log`, or `--output`; every requested format receives the same collected check sections.
+Standalone selectors take precedence over `--uuid` and the full suite. Multiple standalone selectors can be supplied together. `--resource-isolate-settings` runs only its specific report. `--all-optional` includes the standalone storage checks and the complete resource-isolation report in the full suite. `--storage-check` takes precedence when combined with other selection flags, including `--all-optional`, and runs only its five core storage sections. `--pdf` and `--json` can be combined with terminal-only output, `--log`, or `--output`; every requested format receives the same collected check sections.
 
 ### Output and exit behaviour
 
@@ -157,6 +168,8 @@ Standalone selectors take precedence over `--uuid` and the full suite. Multiple 
 - `/etc/fstab` is included in the default report. An unreadable file is reported as `FAIL`.
 - The default suite conditionally includes resource-isolation sections based on `/proc/cmdline` and the loaded `vfio_pci` module. Skipped sections remain visible with an `INFO` result explaining why they were skipped.
 - `--all-optional` includes the complete resource-isolation report. Terminal, plain-text, PDF, and JSON outputs receive the same report collection, including skip messages and the process-column header in `Processes on isolated CPUs`.
+- The FC check inventories remote ports whose role contains `Target`, relates each `rport-*` to its local `hostN`, and reports each target WWPN. An online local FC port with no visible FCP targets is reported as `WARN` with zoning, zoneset, target-port, and fabric guidance.
+- `--storage-check` sends the same five storage sections to terminal, plain-text, PDF, and JSON output. A failing storage result still produces requested report files and returns `1`.
 
 ### Sensitive output
 
@@ -167,7 +180,7 @@ Terminal and generated reports can expose infrastructure and account details. St
 ```
 ./hostinfo_check -h
 usage: hostinfo_check.py [-h] [--uuid UUID] [--all-optional]
-                         [--resource-isolate-settings]
+                         [--resource-isolate-settings] [--storage-check]
                          [--glance-mount-dir GLANCE_MOUNT_DIR]
                          [--log | --output OUTPUT] [--pdf] [--json]
                          [CHECK ...]
@@ -186,6 +199,9 @@ options:
                         reports (default: False)
   --resource-isolate-settings
                         run only CPU, hugepage, IRQ, KVM, and PCI passthrough
+                        checks (default: False)
+  --storage-check       run only iSCSI initiator, FC ports, iscsid
+                        configuration, multipath blacklist, and LVM filter
                         checks (default: False)
   --glance-mount-dir GLANCE_MOUNT_DIR
                         directory used by check-glance-mount (default: /var/opt/imagelibrary)
@@ -702,21 +718,46 @@ NOVA CPU AND PASSTHROUGH CONFIGURATION
 │                                                  │          │ alias = {"vendor_id":"8086", "product_id":"10d3", "device_type":"type-PCI", "name":"82574L-pt"} │
 ╰──────────────────────────────────────────────────┴──────────┴─────────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
-- FC port check output:
+- Actual FC relationship output when the local ports and FCP targets are online:
 ```
 FC PORTS
-╭──────────────────────────────────────────────────────────────────────────╮
-│ Check │ Status │ Output                                                  │
-├───────┼────────┼─────────────────────────────────────────────────────────┤
-│ host0 │   OK   │ WWPN: 0x100000109b123456; WWNN: 0x200000109b123456;     │
-│       │        │ Port State: Online; Speed: 16 Gbit;                     │
-│       │        │ Fabric Name: 0x100000051eabcdef                         │
-├───────┼────────┼─────────────────────────────────────────────────────────┤
-│ host1 │   OK   │ WWPN: 0x100000109b654321; WWNN: 0x200000109b654321;     │
-│       │        │ Port State: Online; Speed: 16 Gbit;                     │
-│       │        │ Fabric Name: 0x100000051efedcba                         │
-╰───────┴────────┴─────────────────────────────────────────────────────────╯
+╭─────────────┬────────┬──────────────────────────────────────────────────────────╮
+│ Check       │ Status │ Output                                                   │
+├─────────────┼────────┼──────────────────────────────────────────────────────────┤
+│ host2       │   OK   │ WWPN: 0x100000109b123456; WWNN: 0x200000109b123456;      │
+│             │        │ Port State: Online; Speed: 32 Gbit;                      │
+│             │        │ Fabric Name: 0x100050eb1a2b3c4d                          │
+├─────────────┼────────┼──────────────────────────────────────────────────────────┤
+│ host3       │   OK   │ WWPN: 0x100000109b123457; WWNN: 0x200000109b123457;      │
+│             │        │ Port State: Online; Speed: 32 Gbit;                      │
+│             │        │ Fabric Name: 0x100050eb1a2b3c4d                          │
+├─────────────┼────────┼──────────────────────────────────────────────────────────┤
+│ rport-2:0-1 │   OK   │ Local Host: host2; Local WWPN: 0x100000109b123456;       │
+│             │        │ Local State: Online; Target WWPN: 0x50060e8012345601;    │
+│             │        │ Remote Role: FCP Target                                  │
+├─────────────┼────────┼──────────────────────────────────────────────────────────┤
+│ rport-2:0-2 │   OK   │ Local Host: host2; Local WWPN: 0x100000109b123456;       │
+│             │        │ Local State: Online; Target WWPN: 0x50060e8012345602;    │
+│             │        │ Remote Role: FCP Target                                  │
+├─────────────┼────────┼──────────────────────────────────────────────────────────┤
+│ rport-3:0-1 │   OK   │ Local Host: host3; Local WWPN: 0x100000109b123457;       │
+│             │        │ Local State: Online; Target WWPN: 0x50060e8012345701;    │
+│             │        │ Remote Role: FCP Target                                  │
+├─────────────┼────────┼──────────────────────────────────────────────────────────┤
+│ rport-3:0-2 │   OK   │ Local Host: host3; Local WWPN: 0x100000109b123457;       │
+│             │        │ Local State: Online; Target WWPN: 0x50060e8012345702;    │
+│             │        │ Remote Role: FCP Target                                  │
+├─────────────┼────────┼──────────────────────────────────────────────────────────┤
+│ FCP targets │   OK   │ FCP target ports visible: 4 across 2 online local FC     │
+│             │        │ port(s); host2: 2 target(s); host3: 2 target(s)          │
+╰─────────────┴────────┴──────────────────────────────────────────────────────────╯
+```
 
+The `rport-*` rows above are the relationship records printed by the script. Each row identifies the local host and WWPN, local state, target WWPN, and remote role. Terminal, plain-text, PDF, and JSON reports preserve this same output.
+
+When the node has no local FC ports, the section instead reports:
+
+```
 FC PORTS
 ╭──────────────────────────────────────────────────────────────────────────╮
 │ Check    │ Status │ Output                                               │

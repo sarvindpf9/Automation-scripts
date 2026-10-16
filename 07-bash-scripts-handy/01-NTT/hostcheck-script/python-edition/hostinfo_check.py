@@ -531,7 +531,7 @@ def check_iscsi_initiator() -> list[CheckResult]:
 
 
 def check_fc_ports() -> list[CheckResult]:
-    """Report Fibre Channel port identity, state, speed, and fabric details."""
+    """Report local FC ports and storage targets visible through the fabric."""
 
     fc_hosts = sorted(Path("/sys/class/fc_host").glob("host*"))
     if not fc_hosts:
@@ -551,11 +551,13 @@ def check_fc_ports() -> list[CheckResult]:
         "Fabric Name": "fabric_name",
     }
     rows: list[CheckResult] = []
+    host_values: dict[str, dict[str, str]] = {}
     for host_path in fc_hosts:
         values = {
             label: (read_text(host_path / attribute) or "").strip()
             for label, attribute in attributes.items()
         }
+        host_values[host_path.name] = values
         missing = [
             label
             for label, value in values.items()
@@ -575,6 +577,95 @@ def check_fc_ports() -> list[CheckResult]:
         if missing:
             details = f"{details}; missing: {', '.join(missing)}"
         rows.append(result(host_path.name, status, details))
+
+    online_hosts = {
+        host_name
+        for host_name, values in host_values.items()
+        if values["Port State"].casefold() == "online"
+    }
+    if not online_hosts:
+        rows.append(
+            result(
+                "FCP targets",
+                "INFO",
+                "remote-target discovery skipped because no local FC ports "
+                "are online",
+            )
+        )
+        return rows
+
+    targets_by_host = {host_name: 0 for host_name in online_hosts}
+    target_count = 0
+    remote_ports = sorted(Path("/sys/class/fc_remote_ports").glob("rport-*"))
+    for remote_path in remote_ports:
+        roles = (read_text(remote_path / "roles") or "").strip()
+        if "target" not in roles.casefold():
+            continue
+
+        target_wwpn = (read_text(remote_path / "port_name") or "").strip()
+        host_match = re.fullmatch(r"rport-(\d+):\d+-\d+", remote_path.name)
+        host_name = f"host{host_match.group(1)}" if host_match else "unknown"
+        local_values = host_values.get(host_name)
+        local_wwpn = local_values["WWPN"] if local_values else "<not reported>"
+        local_state = (
+            local_values["Port State"] if local_values else "<not reported>"
+        )
+
+        relationship_status = "OK"
+        relationship_notes: list[str] = []
+        if local_values is None:
+            relationship_status = "WARN"
+            relationship_notes.append("local FC host not found")
+        elif host_name not in online_hosts:
+            relationship_status = "WARN"
+            relationship_notes.append("local FC port is not online")
+        if not target_wwpn or target_wwpn.casefold() == "unknown":
+            relationship_status = "WARN"
+            relationship_notes.append("target WWPN unavailable")
+
+        details = (
+            f"Local Host: {host_name}; Local WWPN: {local_wwpn}; "
+            f"Local State: {local_state}; "
+            f"Target WWPN: {target_wwpn or '<not reported>'}; "
+            f"Remote Role: {roles or '<not reported>'}"
+        )
+        if relationship_notes:
+            details = f"{details}; notes: {', '.join(relationship_notes)}"
+        rows.append(result(remote_path.name, relationship_status, details))
+
+        target_count += 1
+        if host_name in targets_by_host:
+            targets_by_host[host_name] += 1
+
+    hosts_without_targets = sorted(
+        host_name
+        for host_name, visible_targets in targets_by_host.items()
+        if visible_targets == 0
+    )
+    per_host_counts = "; ".join(
+        f"{host_name}: {targets_by_host[host_name]} target(s)"
+        for host_name in sorted(targets_by_host)
+    )
+    if hosts_without_targets:
+        rows.append(
+            result(
+                "FCP targets",
+                "WARN",
+                f"FCP target ports visible: {target_count}; {per_host_counts}. "
+                "No FCP targets are visible through: "
+                f"{', '.join(hosts_without_targets)}. Check zoning/zoneset "
+                "activation, target-port availability, and fabric connectivity.",
+            )
+        )
+    else:
+        rows.append(
+            result(
+                "FCP targets",
+                "OK",
+                f"FCP target ports visible: {target_count} across "
+                f"{len(online_hosts)} online local FC port(s); {per_host_counts}",
+            )
+        )
     return rows
 
 
@@ -1572,6 +1663,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="run only CPU, hugepage, IRQ, KVM, and PCI passthrough checks",
     )
     parser.add_argument(
+        "--storage-check",
+        action="store_true",
+        help=(
+            "run only iSCSI initiator, FC ports, iscsid configuration, "
+            "multipath blacklist, and LVM filter checks"
+        ),
+    )
+    parser.add_argument(
         "--glance-mount-dir",
         type=Path,
         default=DEFAULT_GLANCE_MOUNT,
@@ -2059,10 +2158,25 @@ def write_json_report(
     )
 
 
+def storage_reports() -> list[tuple[str, list[CheckResult]]]:
+    """Run the core host-storage checks in their normal report order."""
+
+    return [
+        ("ISCSI INITIATOR", check_iscsi_initiator()),
+        ("FC PORTS", check_fc_ports()),
+        ("ISCSID CONF", check_iscsid_conf()),
+        ("MULTIPATH BLACKLIST", check_multipath_blacklist()),
+        ("LVM FILTERS", check_lvm_filters()),
+    ]
+
+
 def run_selected_checks(
     arguments: argparse.Namespace, operating_system: OperatingSystem
 ) -> list[tuple[str, list[CheckResult]]]:
     """Apply the Bash script's check-selection behavior."""
+
+    if arguments.storage_check:
+        return storage_reports()
 
     actions = set(arguments.actions)
     if actions == {"check-sudoers"} and not arguments.all_optional:
@@ -2106,11 +2220,11 @@ def run_selected_checks(
             ("SYSCTL SETTINGS", check_sysctl_settings()),
             ("PACKAGES", check_packages(operating_system)),
             ("SERVICES", check_services()),
-            ("ISCSI INITIATOR", check_iscsi_initiator()),
-            ("FC PORTS", check_fc_ports()),
-            ("ISCSID CONF", check_iscsid_conf()),
-            ("MULTIPATH BLACKLIST", check_multipath_blacklist()),
-            ("LVM FILTERS", check_lvm_filters()),
+        ]
+    )
+    reports.extend(storage_reports())
+    reports.extend(
+        [
             ("PF9 PACKAGES", check_pf9_packages(operating_system)),
             ("PF9 SERVICES", check_pf9_services()),
             ("OVS BRIDGES", check_ovs_bridges()),
@@ -2136,13 +2250,16 @@ def main() -> int:
     sudoers_only = (
         arguments.actions == ["check-sudoers"] and not arguments.all_optional
     )
+    storage_only = arguments.storage_check
     resource_isolation_only = arguments.resource_isolate_settings
 
     console = Console(record=True)
     host_name = socket.gethostname().split(".")[0]
     generated_at = dt.datetime.now().astimezone()
     try:
-        if resource_isolation_only:
+        if storage_only:
+            reports = storage_reports()
+        elif resource_isolation_only:
             reports = resource_isolation_reports()
         elif sudoers_only:
             reports = [("PASSWORDLESS SUDO", check_sudoers())]
