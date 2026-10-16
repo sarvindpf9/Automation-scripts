@@ -595,7 +595,6 @@ def check_fc_ports() -> list[CheckResult]:
         return rows
 
     targets_by_host = {host_name: 0 for host_name in online_hosts}
-    target_count = 0
     remote_ports = sorted(Path("/sys/class/fc_remote_ports").glob("rport-*"))
     for remote_path in remote_ports:
         roles = (read_text(remote_path / "roles") or "").strip()
@@ -633,7 +632,6 @@ def check_fc_ports() -> list[CheckResult]:
             details = f"{details}; notes: {', '.join(relationship_notes)}"
         rows.append(result(remote_path.name, relationship_status, details))
 
-        target_count += 1
         if host_name in targets_by_host:
             targets_by_host[host_name] += 1
 
@@ -651,10 +649,10 @@ def check_fc_ports() -> list[CheckResult]:
             result(
                 "FCP targets",
                 "WARN",
-                f"FCP target ports visible: {target_count}; {per_host_counts}. "
-                "No FCP targets are visible through: "
-                f"{', '.join(hosts_without_targets)}. Check zoning/zoneset "
-                "activation, target-port availability, and fabric connectivity.",
+                "FCP targets are not visible through: "
+                f"{', '.join(hosts_without_targets)}. Visible targets by host: "
+                f"{per_host_counts}. Check zoning/zoneset activation, "
+                "target-port availability, and fabric connectivity.",
             )
         )
     else:
@@ -662,8 +660,8 @@ def check_fc_ports() -> list[CheckResult]:
             result(
                 "FCP targets",
                 "OK",
-                f"FCP target ports visible: {target_count} across "
-                f"{len(online_hosts)} online local FC port(s); {per_host_counts}",
+                "FCP target visibility confirmed for all online local FC "
+                f"ports; {per_host_counts}",
             )
         )
     return rows
