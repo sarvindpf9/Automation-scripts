@@ -10,6 +10,7 @@ import pwd
 import re
 import shlex
 import socket
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -1128,6 +1129,416 @@ def check_vm_disk_multipath() -> list[CheckResult]:
     return rows
 
 
+def expand_cpu_list(cpu_list: str) -> set[int]:
+    """Expand a Linux CPU list such as ``0-3,8`` into CPU numbers."""
+
+    cpus: set[int] = set()
+    for item in cpu_list.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            if "-" in item:
+                start_text, end_text = item.split("-", 1)
+                start = int(start_text)
+                end = int(end_text)
+                cpus.update(range(start, end + 1))
+            else:
+                cpus.add(int(item))
+        except ValueError:
+            continue
+    return cpus
+
+
+def check_cpu_virtualization() -> list[CheckResult]:
+    """Check CPU virtualization flags, KVM, and the libvirt service."""
+
+    cpu_info = read_text(Path("/proc/cpuinfo")) or ""
+    has_virtualization = bool(re.search(r"\b(?:vmx|svm)\b", cpu_info))
+    rows = [
+        result(
+            "CPU virtualization flags",
+            "OK" if has_virtualization else "FAIL",
+            "vmx/svm present" if has_virtualization else "no vmx/svm flag",
+        )
+    ]
+
+    try:
+        kvm_present = stat.S_ISCHR(Path("/dev/kvm").stat().st_mode)
+    except OSError:
+        kvm_present = False
+    rows.append(
+        result(
+            "/dev/kvm",
+            "OK" if kvm_present else "FAIL",
+            "character device present" if kvm_present else "missing",
+        )
+    )
+
+    libvirtd = run_command(["systemctl", "is-active", "--quiet", "libvirtd"])
+    rows.append(
+        result(
+            "libvirtd",
+            "OK" if libvirtd.returncode == 0 else "WARN",
+            "active"
+            if libvirtd.returncode == 0
+            else "not active (check modular virtqemud)",
+        )
+    )
+    return rows
+
+
+def check_kernel_cpu_parameters() -> list[CheckResult]:
+    """Validate CPU isolation, IOMMU, and hugepage kernel parameters."""
+
+    cmdline = (read_text(Path("/proc/cmdline")) or "").strip()
+    checks = [
+        (
+            "IOMMU enabled on cmdline",
+            r"(?:^|\s)(?:intel|amd)_iommu=on(?:\s|$)",
+            "FAIL",
+            "no intel_iommu=on / amd_iommu=on",
+        ),
+        ("iommu=pt", r"(?:^|\s)iommu=pt(?:\s|$)", "WARN", "absent"),
+        ("isolcpus", r"(?:^|\s)isolcpus=\S+", "FAIL", "missing"),
+        ("nohz_full", r"(?:^|\s)nohz_full=\S+", "FAIL", "missing"),
+        ("rcu_nocbs", r"(?:^|\s)rcu_nocbs=\S+", "FAIL", "missing"),
+        (
+            "Hugepage parameters",
+            r"(?:^|\s)(?:hugepagesz|default_hugepagesz)=\S+",
+            "FAIL",
+            "no hugepage parameters",
+        ),
+    ]
+    rows = []
+    for name, pattern, failure_status, failure_output in checks:
+        match = re.search(pattern, cmdline)
+        rows.append(
+            result(
+                name,
+                "OK" if match else failure_status,
+                match.group(0).strip() if match else failure_output,
+            )
+        )
+    rows.append(result("Kernel command line", "INFO", cmdline or "unreadable"))
+    return rows
+
+
+def check_cpu_isolation() -> list[CheckResult]:
+    """Report effective CPU isolation and validate SMT sibling placement."""
+
+    isolated_text = (
+        read_text(Path("/sys/devices/system/cpu/isolated")) or ""
+    ).strip()
+    nohz_text = (read_text(Path("/sys/devices/system/cpu/nohz_full")) or "").strip()
+    online_text = (read_text(Path("/sys/devices/system/cpu/online")) or "").strip()
+    smt_text = (read_text(Path("/sys/devices/system/cpu/smt/active")) or "n/a").strip()
+    rows = [
+        result("Isolated CPUs", "INFO", isolated_text or "not configured"),
+        result("nohz_full CPUs", "INFO", nohz_text or "not configured"),
+        result("Online CPUs", "INFO", online_text or "not reported"),
+        result("SMT active", "INFO", smt_text),
+    ]
+
+    isolated_cpus = expand_cpu_list(isolated_text)
+    sibling_warnings = []
+    for cpu in sorted(isolated_cpus):
+        sibling_path = Path(
+            f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list"
+        )
+        sibling_text = (read_text(sibling_path) or "").strip()
+        siblings = expand_cpu_list(sibling_text)
+        outside = sorted(siblings - isolated_cpus)
+        if outside:
+            sibling_warnings.append(
+                f"cpu{cpu} sibling set {sibling_text} includes non-isolated "
+                f"CPU(s): {','.join(str(item) for item in outside)}"
+            )
+    rows.append(
+        result(
+            "SMT sibling pairing",
+            "WARN" if sibling_warnings else "OK",
+            "\n".join(sibling_warnings) or "check completed",
+        )
+    )
+    return rows
+
+
+def check_hugepage_allocation() -> list[CheckResult]:
+    """Report hugepage allocation, hugetlbfs mounts, and NUMA free pages."""
+
+    memory_info = read_text(Path("/proc/meminfo")) or ""
+    wanted = re.compile(
+        r"^(?:HugePages_Total|HugePages_Free|HugePages_Rsvd|HugePages_Surp|"
+        r"Hugepagesize|Hugetlb):",
+        re.MULTILINE,
+    )
+    values = [line for line in memory_info.splitlines() if wanted.match(line)]
+    rows = [
+        result(
+            "Hugepage allocation",
+            "INFO" if values else "WARN",
+            "\n".join(values) or "hugepage values not found in /proc/meminfo",
+        )
+    ]
+
+    mount = run_command(["findmnt", "-t", "hugetlbfs"])
+    rows.append(
+        result(
+            "hugetlbfs mount",
+            "OK" if mount.returncode == 0 else "WARN",
+            mount.stdout or "no hugetlbfs mount",
+        )
+    )
+    if command_path("virsh"):
+        freepages = run_command(["virsh", "freepages", "--all"])
+        rows.append(
+            result(
+                "NUMA hugepage allocation",
+                "INFO" if freepages.returncode == 0 else "WARN",
+                freepages.stdout or freepages.stderr or "virsh freepages --all failed",
+            )
+        )
+    else:
+        rows.append(result("NUMA hugepage allocation", "WARN", "virsh unavailable"))
+    return rows
+
+
+def check_irq_placement() -> list[CheckResult]:
+    """Check irqbalance configuration and IRQ/process use of isolated CPUs."""
+
+    isolated_text = (
+        read_text(Path("/sys/devices/system/cpu/isolated")) or ""
+    ).strip()
+    isolated_cpus = expand_cpu_list(isolated_text)
+    irqbalance = run_command(["systemctl", "is-active", "--quiet", "irqbalance"])
+    rows = [
+        result(
+            "irqbalance",
+            "OK" if irqbalance.returncode == 0 else "WARN",
+            "active" if irqbalance.returncode == 0 else "not active",
+        )
+    ]
+
+    irqbalance_config = read_text(Path("/etc/default/irqbalance")) or ""
+    banned_setting = next(
+        (
+            line.strip()
+            for line in irqbalance_config.splitlines()
+            if re.match(r"^IRQBALANCE_BANNED_CPU", line)
+        ),
+        "",
+    )
+    rows.append(
+        result(
+            "IRQBALANCE_BANNED_CPU",
+            "OK" if banned_setting else "FAIL",
+            banned_setting or "not configured in /etc/default/irqbalance",
+        )
+    )
+
+    irq_hits = []
+    affinity_paths = Path("/proc/irq").glob("[0-9]*/effective_affinity_list")
+    for affinity_path in sorted(affinity_paths):
+        affinity_text = (read_text(affinity_path) or "").strip()
+        if isolated_cpus & expand_cpu_list(affinity_text):
+            irq_hits.append(f"IRQ {affinity_path.parent.name}: {affinity_text}")
+    rows.append(
+        result(
+            "IRQ affinity on isolated CPUs",
+            "INFO" if irq_hits else "OK",
+            "\n".join(irq_hits) or "no effective-affinity overlap",
+        )
+    )
+
+    if not isolated_cpus:
+        rows.append(
+            result(
+                "Processes on isolated CPUs",
+                "INFO",
+                "CORE   PPID     PID      PROCESS\n"
+                "skipped; no isolated CPUs",
+            )
+        )
+        return rows
+    processes = run_command(["ps", "-eLo", "psr=,ppid=,pid=,comm="])
+    matching_processes = []
+    for line in processes.stdout.splitlines():
+        fields = line.split(maxsplit=3)
+        if fields and fields[0].isdigit() and int(fields[0]) in isolated_cpus:
+            process_name = fields[3] if len(fields) == 4 else ""
+            matching_processes.append(
+                f"{fields[0]:<6} {fields[1]:<8} {fields[2]:<8} {process_name}"
+            )
+    process_output = "CORE   PPID     PID      PROCESS\n"
+    if matching_processes:
+        process_output += "\n".join(matching_processes[:20])
+    else:
+        process_output += "none found"
+    rows.append(
+        result(
+            "Processes on isolated CPUs",
+            "INFO",
+            process_output,
+        )
+    )
+    return rows
+
+
+def check_nic_passthrough() -> list[CheckResult]:
+    """Check IOMMU groups, persistent VFIO overrides, and vfio_pci."""
+
+    iommu_directory = Path("/sys/kernel/iommu_groups")
+    groups = list(iommu_directory.iterdir()) if iommu_directory.is_dir() else []
+    rows = [
+        result(
+            "IOMMU groups",
+            "OK" if groups else "FAIL",
+            f"{len(groups)} group(s) found" if groups else "no IOMMU groups",
+        )
+    ]
+
+    if command_path("driverctl"):
+        overrides = run_command(["driverctl", "list-overrides"])
+        rows.append(
+            result(
+                "driverctl overrides",
+                "INFO" if overrides.stdout else "WARN",
+                overrides.stdout or overrides.stderr or "no device overrides",
+            )
+        )
+        vfio_devices = []
+        for line in overrides.stdout.splitlines():
+            fields = line.split()
+            if len(fields) >= 2 and fields[1] == "vfio-pci":
+                vfio_devices.append(fields[0])
+        if vfio_devices:
+            details = []
+            for pci_address in vfio_devices:
+                pci = run_command(["lspci", "-nnks", pci_address])
+                details.append(
+                    pci.stdout or f"unable to query {pci_address} with lspci"
+                )
+            rows.append(result("vfio-pci devices", "INFO", "\n\n".join(details)))
+        else:
+            rows.append(result("vfio-pci devices", "WARN", "no driver overrides"))
+    else:
+        rows.append(result("driverctl overrides", "WARN", "driverctl unavailable"))
+
+    modules = run_command(["lsmod"])
+    vfio_loaded = bool(re.search(r"^vfio_pci\s", modules.stdout, re.MULTILINE))
+    rows.append(
+        result(
+            "vfio_pci module",
+            "OK" if vfio_loaded else "WARN",
+            "loaded" if vfio_loaded else "not loaded",
+        )
+    )
+    return rows
+
+
+def check_nova_cpu_passthrough_config() -> list[CheckResult]:
+    """Report Nova CPU pinning, memory reservation, PCI, and hugepage settings."""
+
+    nova_path = Path(
+        os.environ.get("NOVA_CONF", "/opt/pf9/etc/nova/conf.d/nova_override.conf")
+    )
+    content = read_text(nova_path)
+    if content is None:
+        return [result("nova.conf", "WARN", f"{nova_path} is not readable")]
+
+    configured = parse_key_value_config(content)
+    rows = []
+    for key in ("cpu_dedicated_set", "cpu_shared_set", "reserved_host_memory_mb"):
+        value = configured.get(key)
+        rows.append(result(key, "INFO" if value else "WARN", value or "not configured"))
+    related = [
+        line.strip()
+        for line in content.splitlines()
+        if re.match(r"^\s*(?:device_spec|alias|reserved_huge_pages)\s*=", line)
+    ]
+    rows.append(
+        result(
+            "PCI aliases, device specs, or reserved hugepages",
+            "INFO" if related else "WARN",
+            "\n".join(related) or "not configured",
+        )
+    )
+    return rows
+
+
+def conditional_resource_isolation_reports() -> list[tuple[str, list[CheckResult]]]:
+    """Return checks enabled by detected CPU, memory, and VFIO settings."""
+
+    reports: list[tuple[str, list[CheckResult]]] = []
+
+    cmdline = (read_text(Path("/proc/cmdline")) or "").strip()
+    dedicated_resources_configured = bool(
+        re.search(
+            r"(?:^|\s)(?:isolcpus|hugepages|hugepagesz|default_hugepagesz)=\S+",
+            cmdline,
+        )
+    )
+    if dedicated_resources_configured:
+        reports.extend(
+            [
+                ("KERNEL COMMAND LINE", check_kernel_cpu_parameters()),
+                ("CPU ISOLATION", check_cpu_isolation()),
+                ("CURRENT HUGEPAGE ALLOCATION", check_hugepage_allocation()),
+                ("IRQ PLACEMENT", check_irq_placement()),
+            ]
+        )
+    else:
+        skipped = "no dedicated CPU or memory configuration setting found"
+        reports.extend(
+            [
+                (title, [result("Resource isolation settings", "INFO", skipped)])
+                for title in (
+                    "KERNEL COMMAND LINE",
+                    "CPU ISOLATION",
+                    "CURRENT HUGEPAGE ALLOCATION",
+                    "IRQ PLACEMENT",
+                )
+            ]
+        )
+
+    modules = run_command(["lsmod"])
+    vfio_pci_loaded = bool(
+        re.search(r"^vfio_pci\s", modules.stdout, re.MULTILINE)
+    ) or Path("/sys/module/vfio_pci").is_dir()
+    if vfio_pci_loaded:
+        reports.append(("NIC PASSTHROUGH CONFIGURATION", check_nic_passthrough()))
+    else:
+        reports.append(
+            (
+                "NIC PASSTHROUGH CONFIGURATION",
+                [
+                    result(
+                        "NIC passthrough settings",
+                        "INFO",
+                        "no NIC passthrough settings configured",
+                    )
+                ],
+            )
+        )
+
+    return reports
+
+
+def resource_isolation_reports() -> list[tuple[str, list[CheckResult]]]:
+    """Return the complete standalone resource-isolation report."""
+
+    reports = [("VIRTUALIZATION AND KVM", check_cpu_virtualization())]
+    reports.extend(conditional_resource_isolation_reports())
+    reports.append(
+        (
+            "NOVA CPU AND PASSTHROUGH CONFIGURATION",
+            check_nova_cpu_passthrough_config(),
+        )
+    )
+    return reports
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line interface."""
 
@@ -1150,9 +1561,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--all-optional",
         action="store_true",
         help=(
-            "run all optional checks except the passwordless sudo user listing; "
-            "results are included in requested log, JSON, and PDF reports"
+            "run all optional checks, including resource-isolation settings, "
+            "except the passwordless sudo user listing; results are included "
+            "in requested log, JSON, and PDF reports"
         ),
+    )
+    parser.add_argument(
+        "--resource-isolate-settings",
+        action="store_true",
+        help="run only CPU, hugepage, IRQ, KVM, and PCI passthrough checks",
     )
     parser.add_argument(
         "--glance-mount-dir",
@@ -1705,6 +2122,10 @@ def run_selected_checks(
             ("PF9 USER AND GROUP", check_pf9_user_group()),
         ]
     )
+    if arguments.all_optional:
+        reports.extend(resource_isolation_reports())
+    else:
+        reports.extend(conditional_resource_isolation_reports())
     return reports
 
 
@@ -1715,12 +2136,15 @@ def main() -> int:
     sudoers_only = (
         arguments.actions == ["check-sudoers"] and not arguments.all_optional
     )
+    resource_isolation_only = arguments.resource_isolate_settings
 
     console = Console(record=True)
     host_name = socket.gethostname().split(".")[0]
     generated_at = dt.datetime.now().astimezone()
     try:
-        if sudoers_only:
+        if resource_isolation_only:
+            reports = resource_isolation_reports()
+        elif sudoers_only:
             reports = [("PASSWORDLESS SUDO", check_sudoers())]
         else:
             operating_system = detect_operating_system()

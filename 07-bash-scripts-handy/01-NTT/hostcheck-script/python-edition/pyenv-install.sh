@@ -6,6 +6,15 @@ VENV_DIR="${SCRIPTS_DIR}/venv"
 REQ_FILE="${1:-${SCRIPTS_DIR}/requirements.txt}"
 PYPI_INDEX="https://pypi.org/simple/"
 
+if [ -r /etc/os-release ]; then
+  # Install the matching venv package before invoking Python 3.12 on Ubuntu 24.04.
+  . /etc/os-release
+  if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ]; then
+    echo "Installing the Python virtual environment package for Ubuntu 24.04 LTS"
+    apt-get install python3.12-venv -yy
+  fi
+fi
+
 if [ ! -d "${SCRIPTS_DIR}" ]; then
   echo "Creating ${SCRIPTS_DIR}"
   mkdir -p "${SCRIPTS_DIR}"
@@ -19,7 +28,9 @@ fi
 
 echo "copying script files to ${SCRIPTS_DIR} directory"
 cp -r ./hostinfo_check.py ${SCRIPTS_DIR}/hostinfo_check
-cp -r ./requirements.txt ${SCRIPTS_DIR}
+if [ "$(readlink -f ./requirements.txt)" != "$(readlink -f "${SCRIPTS_DIR}/requirements.txt")" ]; then
+  cp -r ./requirements.txt "${SCRIPTS_DIR}/requirements.txt"
+fi
 echo " "
 
 echo "Setting up python environment"
