@@ -10,8 +10,13 @@ if [ -r /etc/os-release ]; then
   # Install the matching venv package before invoking Python 3.12 on Ubuntu 24.04.
   . /etc/os-release
   if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ]; then
-    echo "Installing the Python virtual environment package for Ubuntu 24.04 LTS"
-    apt-get install python3.12-venv -yy
+    if dpkg-query --show --showformat='${Status}' python3.12-venv 2>/dev/null \
+      | grep -q '^install ok installed$'; then
+      echo "python3.12-venv is already installed; skipping installation"
+    else
+      echo "Installing the Python virtual environment package for Ubuntu 24.04 LTS"
+      apt-get install python3.12-venv -yy
+    fi
   fi
 fi
 
