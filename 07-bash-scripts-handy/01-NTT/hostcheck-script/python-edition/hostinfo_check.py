@@ -37,6 +37,7 @@ COMMAND_TIMEOUT = 15
 SUPPORTED_ACTIONS = {
     "check-sudoers",
     "check-mpath-orphan",
+    "list-nvme-vm",
     "list-vm-mpath",
     "check-glance-mount",
 }
@@ -530,6 +531,134 @@ def check_iscsi_initiator() -> list[CheckResult]:
     return rows
 
 
+def check_nvme_configuration() -> list[CheckResult]:
+    """Validate NVMe CLI, kernel modules, persistence, and host identity."""
+
+    rows: list[CheckResult] = []
+    nvme_path = command_path("nvme")
+    rows.append(
+        result(
+            "nvme-cli",
+            "OK" if nvme_path else "FAIL",
+            f"command: {nvme_path}" if nvme_path else "nvme command is unavailable",
+        )
+    )
+
+    required_modules = (
+        "nvme_tcp",
+        "nvme_fabrics",
+        "nvme_keyring",
+        "nvme_core",
+        "nvme_auth",
+    )
+    for module_name in required_modules:
+        module_path = Path("/sys/module") / module_name
+        loaded = module_path.is_dir()
+        rows.append(
+            result(
+                f"Runtime module {module_name}",
+                "OK" if loaded else "WARN",
+                "loaded" if loaded else "not loaded",
+            )
+        )
+
+    persistent_modules = ("nvme_tcp", "nvme_fabrics")
+    config_directories = (Path("/etc/modprobe.d"), Path("/etc/modules-load.d"))
+    matches: dict[str, list[str]] = {name: [] for name in persistent_modules}
+    for directory in config_directories:
+        if not directory.is_dir():
+            continue
+        try:
+            config_files = sorted(
+                path for path in directory.iterdir() if path.is_file()
+            )
+        except OSError:
+            continue
+        for config_path in config_files:
+            content = read_text(config_path)
+            if content is None:
+                continue
+            active_lines = "\n".join(
+                line.split("#", 1)[0] for line in content.splitlines()
+            )
+            # Linux treats hyphens and underscores equivalently in module names.
+            normalized_active_lines = active_lines.replace("-", "_")
+            for module_name in persistent_modules:
+                pattern = rf"(?<![\w-]){re.escape(module_name)}(?![\w-])"
+                if re.search(pattern, normalized_active_lines):
+                    matches[module_name].append(str(config_path))
+
+    for module_name in persistent_modules:
+        matching_files = matches[module_name]
+        rows.append(
+            result(
+                f"Persistent module {module_name}",
+                "OK" if matching_files else "WARN",
+                "\n".join(matching_files)
+                if matching_files
+                else "not found in /etc/modprobe.d or /etc/modules-load.d",
+            )
+        )
+
+    multipath_path = Path("/sys/module/nvme_core/parameters/multipath")
+    multipath_value = read_text(multipath_path)
+    if multipath_value is None:
+        rows.append(
+            result(
+                "NVMe native multipath",
+                "WARN",
+                f"{multipath_path} is missing or unreadable",
+            )
+        )
+    else:
+        multipath_value = multipath_value.strip()
+        rows.append(
+            result(
+                "NVMe native multipath",
+                (
+                    "OK"
+                    if multipath_value.casefold() in {"y", "yes", "1"}
+                    else "WARN"
+                ),
+                multipath_value or "empty",
+            )
+        )
+
+    missing_identity_message = (
+        "Generate unique host NQN with nvme gen-hostnqn > /etc/nvme/hostnqn "
+        "command"
+    )
+    for label, identity_path in (
+        ("NVMe host NQN", Path("/etc/nvme/hostnqn")),
+        ("NVMe host ID", Path("/etc/nvme/hostid")),
+    ):
+        identity_value = read_text(identity_path)
+        if identity_value is None or not identity_value.strip():
+            rows.append(
+                result(
+                    label,
+                    "WARN",
+                    f"{identity_path} is missing or empty. {missing_identity_message}",
+                )
+            )
+            continue
+        rows.append(result(label, "OK", identity_value))
+
+    associated_warnings = any(row.status == "WARN" for row in rows[1:])
+    if nvme_path is None and associated_warnings:
+        rows.append(
+            result(
+                "NVMe applicability",
+                "INFO",
+                "System may not require NVMe configuration. If the environment "
+                "does appear to use NVMe as the backend for workloads, the "
+                "outcome can be ignored.",
+            )
+        )
+
+    return rows
+
+
 def check_fc_ports() -> list[CheckResult]:
     """Report local FC ports and storage targets visible through the fabric."""
 
@@ -820,7 +949,7 @@ def check_group_consistency() -> list[CheckResult]:
 def check_rsyslog_pf9_rules() -> list[CheckResult]:
     directory = Path("/etc/rsyslog.d")
     if not directory.is_dir():
-        return [result("PF9 rsyslog rules", "FAIL", f"{directory} not found")]
+        return [result("PF9 rsyslog rules", "WARN", f"{directory} not found")]
     log_paths = [
         "/var/log/pf9/ostackhost.log",
         "/var/log/pf9/cindervolume-base.log",
@@ -836,7 +965,7 @@ def check_rsyslog_pf9_rules() -> list[CheckResult]:
         rows.append(
             result(
                 log_path,
-                "OK" if matches else "FAIL",
+                "OK" if matches else "WARN",
                 "\n".join(matches) or f"not found under {directory}",
             )
         )
@@ -1158,46 +1287,80 @@ def check_multipath_orphans() -> list[CheckResult]:
 def check_vm_disk_multipath() -> list[CheckResult]:
     domains = run_command(["virsh", "list", "--name"], timeout=10)
     if domains.returncode != 0:
-        return [result("VM disk multipath", "WARN", "virsh is unavailable or unresponsive")]
+        return [
+            result(
+                "VM disk multipath",
+                "WARN",
+                "virsh is unavailable or unresponsive",
+            )
+        ]
     virtual_machines = [name for name in domains.stdout.splitlines() if name]
     if not virtual_machines:
         return [result("VM disk multipath", "INFO", "no running VMs")]
     stanzas = parse_multipath_stanzas(run_command(["multipath", "-ll"]).stdout)
     rows: list[CheckResult] = []
-    qemu_dir = Path("/etc/libvirt/qemu")
     for virtual_machine in virtual_machines:
         domain_info = run_command(["virsh", "dominfo", virtual_machine]).stdout
         uuid_match = re.search(r"^UUID:\s*(\S+)", domain_info, re.MULTILINE)
-        block_list = run_command(
+        uuid_text = uuid_match.group(1) if uuid_match else "unknown"
+        block_list_result = run_command(
             ["virsh", "domblklist", "--details", virtual_machine]
-        ).stdout
-        devices: set[str] = set()
-        for path_value in re.findall(r"(/dev/\S+)", block_list):
-            direct = re.search(r"/(dm-\d+)$", path_value)
-            if direct:
-                devices.add(direct.group(1))
-            else:
-                resolved = run_command(["readlink", "-f", path_value]).stdout
-                match = re.search(r"/(dm-\d+)$", resolved)
-                if match:
-                    devices.add(match.group(1))
-        if not devices:
-            xml_content = read_text(qemu_dir / f"{virtual_machine}.xml")
-            if xml_content:
-                devices = xml_dm_devices(xml_content)
-        if not devices:
-            rows.append(result(virtual_machine, "WARN", "no dm-N block devices found"))
+        )
+        if block_list_result.returncode != 0:
+            rows.append(
+                result(
+                    virtual_machine,
+                    "WARN",
+                    block_list_result.stderr or "unable to list VM block devices",
+                )
+            )
             continue
-        for device in sorted(devices):
+
+        disks: list[tuple[str, str]] = []
+        for line in block_list_result.stdout.splitlines():
+            fields = line.split()
+            if len(fields) >= 4 and fields[1] == "disk" and fields[3] != "-":
+                disks.append((fields[2], fields[3]))
+        if not disks:
+            rows.append(result(virtual_machine, "WARN", "no VM disks found"))
+            continue
+
+        for target, source in disks:
+            resolved_source = run_command(["readlink", "-f", source]).stdout or source
+            device_match = re.search(r"/(dm-\d+)$", resolved_source)
+            identity = f"{virtual_machine}: {target}"
+            if not device_match:
+                rows.append(
+                    result(
+                        identity,
+                        "non-multipath disk",
+                        f"UUID: {uuid_text}; source: {source}; "
+                        f"resolved: {resolved_source}\n"
+                        "VM appears to disk which are not managed by "
+                        "dm-multipath services",
+                    )
+                )
+                continue
+
+            device = device_match.group(1)
             mapping = stanzas.get(device)
-            identity = f"{virtual_machine}: {device}"
-            uuid_text = uuid_match.group(1) if uuid_match else "unknown"
             if not mapping:
-                rows.append(result(identity, "FAIL", f"UUID: {uuid_text}; not found in multipath"))
+                rows.append(
+                    result(
+                        identity,
+                        "FAIL",
+                        f"UUID: {uuid_text}; device: {device}; "
+                        "not found in multipath output",
+                    )
+                )
                 continue
             map_name, stanza = mapping
             path_lines = re.findall(r"^.*\d+:\d+:\d+:\d+.*$", stanza, re.MULTILINE)
-            active = [line for line in path_lines if re.search(r"\bactive\b.*\bready\b", line)]
+            active = [
+                line
+                for line in path_lines
+                if re.search(r"\bactive\b.*\bready\b", line)
+            ]
             if path_lines and len(active) == len(path_lines):
                 status = "OK"
                 state = "active"
@@ -1211,10 +1374,180 @@ def check_vm_disk_multipath() -> list[CheckResult]:
                 result(
                     identity,
                     status,
-                    f"UUID: {uuid_text}; map: {map_name}; {state} "
+                    f"UUID: {uuid_text}; device: {device}; map: {map_name}; {state} "
                     f"({len(active)}/{len(path_lines)} paths up)",
                 )
             )
+    return rows
+
+
+def resolve_nvme_namespace(device_path: str) -> str | None:
+    """Resolve a libvirt block path to its parent NVMe namespace device."""
+
+    resolved_path = run_command(["readlink", "-f", device_path]).stdout
+    candidate = resolved_path or device_path
+    match = re.fullmatch(r"/dev/(nvme\d+n\d+)(?:p\d+)?", candidate)
+    return f"/dev/{match.group(1)}" if match else None
+
+
+def check_vm_nvme_attachments() -> list[CheckResult]:
+    """Map running VM disks to NVMe subsystems using the local host NQN."""
+
+    ostackhost = run_command(
+        ["systemctl", "is-active", "--quiet", "pf9-ostackhost.service"]
+    )
+    if ostackhost.returncode != 0:
+        return [
+            result(
+                "VM NVMe attachments",
+                "INFO",
+                "ostackhost service not running on the host skipping the check",
+            )
+        ]
+
+    domains = run_command(["virsh", "list", "--name"], timeout=10)
+    if domains.returncode != 0:
+        return [
+            result(
+                "VM NVMe attachments",
+                "WARN",
+                domains.stderr or "virsh is unavailable or unresponsive",
+            )
+        ]
+
+    virtual_machines = [name for name in domains.stdout.splitlines() if name]
+    if not virtual_machines:
+        return [
+            result(
+                "VM NVMe attachments",
+                "INFO",
+                "virsh returned no running VMs; skipping the check",
+            )
+        ]
+
+    hostnqn_path = Path("/etc/nvme/hostnqn")
+    hostnqn = (read_text(hostnqn_path) or "").strip()
+    nvme_path = command_path("nvme")
+    multipath_stanzas = parse_multipath_stanzas(
+        run_command(["multipath", "-ll"]).stdout
+    )
+
+    rows: list[CheckResult] = []
+    for virtual_machine in virtual_machines:
+        domain_info = run_command(["virsh", "dominfo", virtual_machine]).stdout
+        uuid_match = re.search(r"^UUID:\s*(\S+)", domain_info, re.MULTILINE)
+        uuid_text = uuid_match.group(1) if uuid_match else "unknown"
+        block_list = run_command(
+            ["virsh", "domblklist", "--details", virtual_machine]
+        )
+        if block_list.returncode != 0:
+            rows.append(
+                result(
+                    virtual_machine,
+                    "WARN",
+                    block_list.stderr or "unable to list VM block devices",
+                )
+            )
+            continue
+
+        disks: list[tuple[str, str]] = []
+        for line in block_list.stdout.splitlines():
+            fields = line.split()
+            if len(fields) >= 4 and fields[1] == "disk" and fields[3] != "-":
+                disks.append((fields[2], fields[3]))
+        if not disks:
+            rows.append(result(virtual_machine, "WARN", "no VM disks found"))
+            continue
+
+        for target, source in disks:
+            resolved_source = run_command(["readlink", "-f", source]).stdout or source
+            device = resolve_nvme_namespace(source)
+            identity = f"{virtual_machine} ({uuid_text}) -> {target}"
+            if device is None:
+                dm_match = re.search(r"/(dm-\d+)$", resolved_source)
+                mapping = (
+                    multipath_stanzas.get(dm_match.group(1)) if dm_match else None
+                )
+                if not mapping:
+                    rows.append(
+                        result(
+                            identity,
+                            "non-nVMe",
+                            f"source: {source}\nresolved: {resolved_source}",
+                        )
+                    )
+                    continue
+
+                map_name, stanza = mapping
+                path_lines = re.findall(
+                    r"^.*\d+:\d+:\d+:\d+.*$", stanza, re.MULTILINE
+                )
+                active_paths = [
+                    line
+                    for line in path_lines
+                    if re.search(r"\bactive\b.*\bready\b", line)
+                ]
+                if path_lines and len(active_paths) == len(path_lines):
+                    path_state = "active"
+                elif active_paths:
+                    path_state = "degraded"
+                else:
+                    path_state = "dead"
+                rows.append(
+                    result(
+                        identity,
+                        "non-nVMe",
+                        f"source: {source}; map: {map_name}; {path_state} "
+                        f"({len(active_paths)}/{len(path_lines)} paths up)\n{stanza}",
+                    )
+                )
+                continue
+
+            if not hostnqn:
+                rows.append(
+                    result(
+                        identity,
+                        "FAIL",
+                        f"device: {device}; {hostnqn_path} is missing, unreadable, "
+                        "or empty",
+                    )
+                )
+                continue
+            if nvme_path is None:
+                rows.append(
+                    result(identity, "FAIL", f"device: {device}; nvme unavailable")
+                )
+                continue
+
+            subsystem = run_command(["nvme", "list-subsys", device])
+            if subsystem.returncode != 0:
+                rows.append(
+                    result(
+                        identity,
+                        "FAIL",
+                        subsystem.stderr or "unable to query NVMe subsystem",
+                    )
+                )
+                continue
+
+            subsystem_hostnqns = set(
+                re.findall(r"^\s*hostnqn\s*=\s*(\S+)", subsystem.stdout, re.MULTILINE)
+            )
+            hostnqn_matches = hostnqn in subsystem_hostnqns
+            status = "OK" if hostnqn_matches else "WARN"
+            match_detail = (
+                f"hostnqn matches {hostnqn_path}"
+                if hostnqn_matches
+                else f"hostnqn does not match {hostnqn_path}"
+            )
+            rows.append(
+                result(
+                    identity,
+                    status,
+                    f"device: {device}; {match_detail}\n{subsystem.stdout}",
+                )
+            )
+
     return rows
 
 
@@ -1641,7 +1974,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="CHECK",
         help=(
             "optional standalone check: check-sudoers, check-mpath-orphan, "
-            "list-vm-mpath, or check-glance-mount"
+            "list-nvme-vm, list-vm-mpath, or check-glance-mount"
         ),
     )
     parser.add_argument("--virsh", action="store_true", help=argparse.SUPPRESS)
@@ -1656,6 +1989,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--run-all",
+        action="store_true",
+        help=(
+            "run every non-parameterized check, including passwordless sudo, "
+            "standalone storage checks, and resource-isolation checks"
+        ),
+    )
+    parser.add_argument(
         "--resource-isolate-settings",
         action="store_true",
         help="run only CPU, hugepage, IRQ, KVM, and PCI passthrough checks",
@@ -1664,7 +2005,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--storage-check",
         action="store_true",
         help=(
-            "run only iSCSI initiator, FC ports, iscsid configuration, "
+            "run only NVMe, iSCSI initiator, FC ports, iscsid configuration, "
             "multipath blacklist, and LVM filter checks"
         ),
     )
@@ -1731,6 +2072,8 @@ def status_text(status: str) -> Text:
         "FAIL": "bold red",
         "WARN": "bold yellow",
         "INFO": "cyan",
+        "non-nVMe": "cyan",
+        "non-multipath disk": "cyan",
         "ERROR": "bold red",
     }
     return Text(status, style=styles.get(status, "white"))
@@ -1755,6 +2098,14 @@ def comparison_table(row: CheckResult) -> Table:
     return table
 
 
+def report_name_column(title: str) -> str:
+    """Return the first-column heading for a report section."""
+
+    if title == "VM NVME ATTACHMENTS":
+        return "VM UUID->root Disk"
+    return "Check"
+
+
 def render_section(console: Console, title: str, rows: Iterable[CheckResult]) -> None:
     """Render one rounded Rich table."""
 
@@ -1764,8 +2115,11 @@ def render_section(console: Console, title: str, rows: Iterable[CheckResult]) ->
         box=box.ROUNDED,
         show_lines=True,
     )
-    table.add_column("Check", style="bold cyan", no_wrap=True, ratio=1)
-    table.add_column("Status", justify="center", no_wrap=True, width=8)
+    table.add_column(
+        report_name_column(title), style="bold cyan", no_wrap=True, ratio=1
+    )
+    status_width = 20 if title == "VM DISK MULTIPATH" else 8
+    table.add_column("Status", justify="center", no_wrap=True, width=status_width)
     table.add_column("Output", overflow="fold", ratio=3)
     for row in rows:
         output = comparison_table(row) if row.expected is not None else row.output or "-"
@@ -1914,6 +2268,8 @@ def write_pdf_report(
         "FAIL": colors.HexColor("#dc2626"),
         "WARN": colors.HexColor("#d97706"),
         "INFO": colors.HexColor("#0891b2"),
+        "non-nVMe": colors.HexColor("#0891b2"),
+        "non-multipath disk": colors.HexColor("#0891b2"),
         "ERROR": colors.HexColor("#dc2626"),
     }
 
@@ -1990,7 +2346,7 @@ def write_pdf_report(
         )
         table_data: list[list[object]] = [
             [
-                Paragraph("Check", header_style),
+                Paragraph(report_name_column(section_title), header_style),
                 Paragraph("Status", header_style),
                 Paragraph("Output", header_style),
             ]
@@ -2160,6 +2516,7 @@ def storage_reports() -> list[tuple[str, list[CheckResult]]]:
     """Run the core host-storage checks in their normal report order."""
 
     return [
+        ("NVME CONFIGURATION", check_nvme_configuration()),
         ("ISCSI INITIATOR", check_iscsi_initiator()),
         ("FC PORTS", check_fc_ports()),
         ("ISCSID CONF", check_iscsid_conf()),
@@ -2173,23 +2530,26 @@ def run_selected_checks(
 ) -> list[tuple[str, list[CheckResult]]]:
     """Apply the Bash script's check-selection behavior."""
 
-    if arguments.storage_check:
+    if arguments.storage_check and not arguments.run_all:
         return storage_reports()
 
-    actions = set(arguments.actions)
-    if actions == {"check-sudoers"} and not arguments.all_optional:
+    actions = set(SUPPORTED_ACTIONS) if arguments.run_all else set(arguments.actions)
+    run_all_optional = arguments.all_optional or arguments.run_all
+    if actions == {"check-sudoers"} and not run_all_optional:
         return [("PASSWORDLESS SUDO", check_sudoers())]
 
     reports = [("ENVIRONMENT", check_environment(operating_system))]
     standalone = actions & {
         "check-mpath-orphan",
+        "list-nvme-vm",
         "list-vm-mpath",
         "check-glance-mount",
     }
-    if arguments.all_optional:
+    if run_all_optional:
         standalone.update(
             {
                 "check-mpath-orphan",
+                "list-nvme-vm",
                 "list-vm-mpath",
                 "check-glance-mount",
             }
@@ -2197,19 +2557,24 @@ def run_selected_checks(
     if standalone:
         if "check-mpath-orphan" in standalone:
             reports.append(("MULTIPATH ORPHANS", check_multipath_orphans()))
+        if "list-nvme-vm" in standalone:
+            reports.append(("VM NVME ATTACHMENTS", check_vm_nvme_attachments()))
         if "list-vm-mpath" in standalone:
             reports.append(("VM DISK MULTIPATH", check_vm_disk_multipath()))
         if "check-glance-mount" in standalone:
             reports.append(
                 ("GLANCE IMAGE MOUNT", check_glance_mount(arguments.glance_mount_dir))
             )
-        if not arguments.all_optional:
+        if not run_all_optional:
             return reports
     if arguments.uuid:
         reports.append(("VIRSH VM", check_virsh_vm(arguments.uuid)))
-        return reports
+        if not arguments.run_all:
+            return reports
 
-    if "check-sudoers" in actions and not arguments.all_optional:
+    if "check-sudoers" in actions and (
+        arguments.run_all or not arguments.all_optional
+    ):
         reports.append(("PASSWORDLESS SUDO", check_sudoers()))
     reports.extend(
         [
@@ -2234,7 +2599,7 @@ def run_selected_checks(
             ("PF9 USER AND GROUP", check_pf9_user_group()),
         ]
     )
-    if arguments.all_optional:
+    if run_all_optional:
         reports.extend(resource_isolation_reports())
     else:
         reports.extend(conditional_resource_isolation_reports())
@@ -2246,10 +2611,14 @@ def main() -> int:
     arguments = parser.parse_args(normalize_legacy_arguments(sys.argv[1:]))
     arguments.actions = validate_actions(parser, arguments.actions)
     sudoers_only = (
-        arguments.actions == ["check-sudoers"] and not arguments.all_optional
+        arguments.actions == ["check-sudoers"]
+        and not arguments.all_optional
+        and not arguments.run_all
     )
-    storage_only = arguments.storage_check
-    resource_isolation_only = arguments.resource_isolate_settings
+    storage_only = arguments.storage_check and not arguments.run_all
+    resource_isolation_only = (
+        arguments.resource_isolate_settings and not arguments.run_all
+    )
 
     console = Console(record=True)
     host_name = socket.gethostname().split(".")[0]
