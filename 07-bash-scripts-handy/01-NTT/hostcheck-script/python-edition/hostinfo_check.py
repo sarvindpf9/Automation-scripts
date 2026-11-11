@@ -34,6 +34,7 @@ except ImportError:
 
 DEFAULT_GLANCE_MOUNT = Path("/var/opt/imagelibrary")
 COMMAND_TIMEOUT = 15
+GIB = 1024**3
 SUPPORTED_ACTIONS = {
     "check-sudoers",
     "check-mpath-orphan",
@@ -446,9 +447,181 @@ def check_bond() -> list[CheckResult]:
         rows.append(
             result(
                 interface,
-                "OK" if "802.3ad" in mode else "WARN",
+                "OK" if "802.3ad" in mode else "INFO",
                 f"mode: {mode}; slaves: {', '.join(slave_interfaces) or 'none'}; "
                 f"IP: {', '.join(addresses) or 'none'}",
+            )
+        )
+    return rows
+
+
+def fstab_mount_entry(mount_target: str) -> str | None:
+    """Return the active /etc/fstab line for a mount target, when present."""
+
+    content = read_text(Path("/etc/fstab"))
+    if content is None:
+        return None
+
+    normalized_target = os.path.normpath(mount_target)
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split()
+        if len(fields) >= 2 and os.path.normpath(fields[1]) == normalized_target:
+            return line
+    return None
+
+
+def check_pf9_service_storage(
+    package_name: str,
+    service_name: str,
+    directory: Path,
+    minimum_size_gib: int,
+    operating_system: OperatingSystem,
+) -> list[CheckResult]:
+    """Check storage only when the corresponding PF9 role is installed and active."""
+
+    if not package_is_installed(package_name, operating_system):
+        return []
+    service_status = run_command(
+        ["systemctl", "is-active", "--quiet", service_name]
+    )
+    if service_status.returncode != 0:
+        return []
+
+    rows: list[CheckResult] = []
+    try:
+        filesystem = os.statvfs(directory)
+    except OSError as error:
+        return [result(f"{directory} filesystem", "WARN", str(error))]
+
+    size_bytes = filesystem.f_blocks * filesystem.f_frsize
+    size_gib = size_bytes / GIB
+    rows.append(
+        comparison_result(
+            f"{directory} filesystem size",
+            "OK" if size_bytes >= minimum_size_gib * GIB else "WARN",
+            f"{size_gib:.2f} GiB",
+            f">= {minimum_size_gib} GiB",
+            (
+                f"Filesystem containing {directory} is below the required size."
+                if size_bytes < minimum_size_gib * GIB
+                else str(directory)
+            ),
+        )
+    )
+
+    mount = run_command(
+        [
+            "findmnt",
+            "--json",
+            "--target",
+            str(directory),
+            "--output",
+            "SOURCE,TARGET,FSTYPE,OPTIONS",
+        ]
+    )
+    if mount.returncode != 0:
+        rows.append(
+            result(
+                f"{directory} mount details",
+                "WARN",
+                mount.stderr or "findmnt could not identify the underlying filesystem",
+            )
+        )
+        return rows
+
+    try:
+        filesystems = json.loads(mount.stdout).get("filesystems", [])
+    except (json.JSONDecodeError, AttributeError):
+        filesystems = []
+    if not filesystems:
+        rows.append(result(f"{directory} mount details", "WARN", "no mount found"))
+        return rows
+
+    mount_details = filesystems[0]
+    filesystem_type = str(mount_details.get("fstype", ""))
+    mount_target = str(mount_details.get("target", ""))
+    details = (
+        f"source={mount_details.get('source', 'unknown')}; "
+        f"target={mount_target or 'unknown'}; type={filesystem_type}; "
+        f"options={mount_details.get('options', 'unknown')}"
+    )
+    fstab_entry = fstab_mount_entry(mount_target) if mount_target else None
+    if filesystem_type.lower().startswith("nfs"):
+        rows.append(
+            result(f"{directory} filesystem backing", "INFO", f"NFS: {details}")
+        )
+        rows.append(
+            result(
+                f"{directory} NFS fstab entry",
+                "OK" if fstab_entry else "WARN",
+                (
+                    fstab_entry
+                    if fstab_entry
+                    else (
+                        f"NFS mount target {mount_target or 'unknown'} is absent "
+                        "from /etc/fstab"
+                    )
+                ),
+            )
+        )
+    elif mount_target != "/" and fstab_entry:
+        rows.append(
+            result(
+                f"{directory} filesystem backing",
+                "INFO",
+                f"Dedicated non-NFS mount: {details}; fstab={fstab_entry}",
+            )
+        )
+    else:
+        rows.append(
+            result(
+                f"{directory} filesystem backing",
+                "INFO",
+                f"Local filesystem: {details}",
+            )
+        )
+    return rows
+
+
+def check_pf9_service_filesystems(
+    operating_system: OperatingSystem,
+) -> list[CheckResult]:
+    """Validate filesystem capacity and NFS persistence for PF9 data paths."""
+
+    checks = (
+        (
+            "pf9-glance-role",
+            "pf9-glance-api.service",
+            Path("/var/lib/nginx"),
+            50,
+        ),
+        (
+            "pf9-cindervolume-base",
+            "pf9-cindervolume-base.service",
+            Path("/opt/pf9/pf9-cindervolume-base/state/conversion"),
+            100,
+        ),
+    )
+    rows: list[CheckResult] = []
+    for package_name, service_name, directory, minimum_size_gib in checks:
+        rows.extend(
+            check_pf9_service_storage(
+                package_name,
+                service_name,
+                directory,
+                minimum_size_gib,
+                operating_system,
+            )
+        )
+    if not rows:
+        rows.append(
+            result(
+                "PF9 service filesystems",
+                "INFO",
+                "no applicable installed package with an active service",
             )
         )
     return rows
@@ -651,7 +824,7 @@ def check_nvme_configuration() -> list[CheckResult]:
                 "NVMe applicability",
                 "INFO",
                 "System may not require NVMe configuration. If the environment "
-                "does appear to use NVMe as the backend for workloads, the "
+                "does not use NVMe as the backend for workloads, the "
                 "outcome can be ignored.",
             )
         )
@@ -1095,7 +1268,95 @@ def compare_libvirt_inventory() -> str:
     )
 
 
-def check_pf9_services() -> list[CheckResult]:
+def check_file_ownership(
+    path: Path,
+    check_name: str,
+    *,
+    missing_status: str = "WARN",
+    missing_message: str = "missing or unreadable",
+) -> CheckResult:
+    """Report a file's mode and whether pf9:pf9group owns it."""
+
+    try:
+        file_stat = path.stat()
+    except OSError:
+        return result(check_name, missing_status, missing_message)
+
+    try:
+        owner = pwd.getpwuid(file_stat.st_uid).pw_name
+    except KeyError:
+        owner = str(file_stat.st_uid)
+    try:
+        group = grp.getgrgid(file_stat.st_gid).gr_name
+    except KeyError:
+        group = str(file_stat.st_gid)
+
+    ownership = f"{owner}:{group}"
+    mode = stat.filemode(file_stat.st_mode)
+    output = f"path={path}; ownership={ownership}; mode={mode}"
+    if ownership != "pf9:pf9group":
+        output += "\nthe owner and the group requires to be pf9:pf9group"
+    return result(
+        check_name,
+        "OK" if ownership == "pf9:pf9group" else "WARN",
+        output,
+    )
+
+
+def override_content_result(
+    check_name: str,
+    content: str | None,
+    *,
+    missing_status: str = "WARN",
+    missing_message: str = "missing or unreadable",
+) -> CheckResult:
+    """Distinguish missing, empty, and populated override files."""
+
+    if content is None:
+        return result(check_name, missing_status, missing_message)
+    if not content.strip():
+        return result(check_name, "INFO", "file found with no content")
+    return result(check_name, "INFO", content)
+
+
+def check_glance_cinder_store_parameters(path: Path) -> CheckResult:
+    """Report required Glance Cinder store parameters without exposing secrets."""
+
+    required_parameters = (
+        "cinder_api_insecure",
+        "cinder_os_region_name",
+        "cinder_store_auth_address",
+        "cinder_store_password",
+        "cinder_store_project_domain_name",
+        "cinder_store_project_name",
+        "cinder_store_user_domain_name",
+        "cinder_store_user_name",
+        "cinder_volume_type",
+    )
+    content = read_text(path)
+    if content is None:
+        return result(
+            "Glance Cinder store parameters",
+            "WARN",
+            f"{path} is missing or unreadable",
+        )
+
+    configured = parse_key_value_config(content)
+    missing = [key for key in required_parameters if not configured.get(key)]
+    parameter_status = [
+        f"{key}: {'missing' if key in missing else 'configured'}"
+        for key in required_parameters
+    ]
+    if missing:
+        parameter_status.append(f"Missing parameters: {', '.join(missing)}")
+    return result(
+        "Glance Cinder store parameters",
+        "WARN" if missing else "OK",
+        "\n".join(parameter_status),
+    )
+
+
+def check_pf9_services(operating_system: OperatingSystem) -> list[CheckResult]:
     services = [
         "pf9-ostackhost.service",
         "pf9-cindervolume-base.service",
@@ -1113,11 +1374,13 @@ def check_pf9_services() -> list[CheckResult]:
     ]
     rows = [service_result(service) for service in services]
     status_by_name = {row.name: row.status for row in rows}
-    if status_by_name.get("pf9-ostackhost.service") == "OK":
+    if package_is_installed(
+        "pf9-ostackhost", operating_system
+    ) and status_by_name.get("pf9-ostackhost.service") == "OK":
         nova_path = Path("/opt/pf9/etc/nova/conf.d/nova_override.conf")
         content = read_text(nova_path)
         if content is None:
-            rows.append(result("nova_override.conf", "WARN", "missing or unreadable"))
+            rows.append(result("nova_override.conf", "INFO", "no nova overrides found on the host"))
         else:
             match = re.search(r"^\s*volume_use_multipath\s*=.*$", content, re.MULTILINE)
             rows.append(
@@ -1127,19 +1390,58 @@ def check_pf9_services() -> list[CheckResult]:
                     match.group(0).strip() if match else "setting is absent",
                 )
             )
-            rows.append(result("nova_override.conf content", "INFO", content))
+        rows.append(
+            override_content_result("nova_override.conf content", content)
+        )
+        rows.append(
+            check_file_ownership(
+                nova_path,
+                "nova_override.conf ownership",
+                missing_status="INFO",
+            )
+        )
         rows.append(result("Libvirt VM inventory", "INFO", compare_libvirt_inventory()))
 
-    if status_by_name.get("pf9-cindervolume-base.service") == "OK":
+    if package_is_installed(
+        "pf9-cindervolume-base", operating_system
+    ) and status_by_name.get("pf9-cindervolume-base.service") == "OK":
         cinder_path = Path(
             "/opt/pf9/etc/pf9-cindervolume-base/conf.d/cinder_override.conf"
         )
         content = read_text(cinder_path)
         rows.append(
-            result(
-                "cinder_override.conf",
-                "OK" if content is not None else "WARN",
-                content or "missing or unreadable",
+            override_content_result("cinder_override.conf content", content)
+        )
+        rows.append(
+            check_file_ownership(
+                cinder_path,
+                "cinder_override.conf ownership",
+                missing_status="INFO",
+            )
+        )
+
+    if package_is_installed(
+        "pf9-glance-role", operating_system
+    ) and status_by_name.get("pf9-glance-api.service") == "OK":
+        rows.append(
+            check_glance_cinder_store_parameters(Path("/etc/glance-api.conf"))
+        )
+        glance_override_path = Path("/etc/glance/glance-api-override.conf")
+        glance_override_content = read_text(glance_override_path)
+        rows.append(
+            override_content_result(
+                "glance-api-override.conf content",
+                glance_override_content,
+                missing_status="INFO",
+                missing_message="no glance overrides found on the host",
+            )
+        )
+        rows.append(
+            check_file_ownership(
+                glance_override_path,
+                "glance-api-override.conf ownership",
+                missing_status="INFO",
+                missing_message="no glance overrides found on the host",
             )
         )
     return rows
@@ -2010,6 +2312,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--nvme-config",
+        action="store_true",
+        help="include the NVMe configuration check",
+    )
+    parser.add_argument(
         "--glance-mount-dir",
         type=Path,
         default=DEFAULT_GLANCE_MOUNT,
@@ -2512,17 +2819,21 @@ def write_json_report(
     )
 
 
-def storage_reports() -> list[tuple[str, list[CheckResult]]]:
+def storage_reports(
+    *, include_nvme: bool = False
+) -> list[tuple[str, list[CheckResult]]]:
     """Run the core host-storage checks in their normal report order."""
 
-    return [
-        ("NVME CONFIGURATION", check_nvme_configuration()),
+    reports = [
         ("ISCSI INITIATOR", check_iscsi_initiator()),
         ("FC PORTS", check_fc_ports()),
         ("ISCSID CONF", check_iscsid_conf()),
         ("MULTIPATH BLACKLIST", check_multipath_blacklist()),
         ("LVM FILTERS", check_lvm_filters()),
     ]
+    if include_nvme:
+        reports.insert(0, ("NVME CONFIGURATION", check_nvme_configuration()))
+    return reports
 
 
 def run_selected_checks(
@@ -2531,12 +2842,15 @@ def run_selected_checks(
     """Apply the Bash script's check-selection behavior."""
 
     if arguments.storage_check and not arguments.run_all:
-        return storage_reports()
+        return storage_reports(include_nvme=True)
 
     actions = set(SUPPORTED_ACTIONS) if arguments.run_all else set(arguments.actions)
     run_all_optional = arguments.all_optional or arguments.run_all
     if actions == {"check-sudoers"} and not run_all_optional:
-        return [("PASSWORDLESS SUDO", check_sudoers())]
+        reports = [("PASSWORDLESS SUDO", check_sudoers())]
+        if arguments.nvme_config:
+            reports.append(("NVME CONFIGURATION", check_nvme_configuration()))
+        return reports
 
     reports = [("ENVIRONMENT", check_environment(operating_system))]
     standalone = actions & {
@@ -2566,10 +2880,14 @@ def run_selected_checks(
                 ("GLANCE IMAGE MOUNT", check_glance_mount(arguments.glance_mount_dir))
             )
         if not run_all_optional:
+            if arguments.nvme_config:
+                reports.append(("NVME CONFIGURATION", check_nvme_configuration()))
             return reports
     if arguments.uuid:
         reports.append(("VIRSH VM", check_virsh_vm(arguments.uuid)))
         if not arguments.run_all:
+            if arguments.nvme_config:
+                reports.append(("NVME CONFIGURATION", check_nvme_configuration()))
             return reports
 
     if "check-sudoers" in actions and (
@@ -2585,11 +2903,17 @@ def run_selected_checks(
             ("SERVICES", check_services()),
         ]
     )
-    reports.extend(storage_reports())
+    reports.extend(
+        storage_reports(include_nvme=arguments.nvme_config or arguments.run_all)
+    )
     reports.extend(
         [
             ("PF9 PACKAGES", check_pf9_packages(operating_system)),
-            ("PF9 SERVICES", check_pf9_services()),
+            ("PF9 SERVICES", check_pf9_services(operating_system)),
+            (
+                "PF9 SERVICE FILESYSTEMS",
+                check_pf9_service_filesystems(operating_system),
+            ),
             ("OVS BRIDGES", check_ovs_bridges()),
             ("/ETC/HOSTS ENTRIES", check_hosts()),
             ("/ETC/FSTAB ENTRIES", check_fstab()),
@@ -2614,6 +2938,7 @@ def main() -> int:
         arguments.actions == ["check-sudoers"]
         and not arguments.all_optional
         and not arguments.run_all
+        and not arguments.nvme_config
     )
     storage_only = arguments.storage_check and not arguments.run_all
     resource_isolation_only = (
@@ -2625,9 +2950,11 @@ def main() -> int:
     generated_at = dt.datetime.now().astimezone()
     try:
         if storage_only:
-            reports = storage_reports()
+            reports = storage_reports(include_nvme=True)
         elif resource_isolation_only:
             reports = resource_isolation_reports()
+            if arguments.nvme_config:
+                reports.append(("NVME CONFIGURATION", check_nvme_configuration()))
         elif sudoers_only:
             reports = [("PASSWORDLESS SUDO", check_sudoers())]
         else:

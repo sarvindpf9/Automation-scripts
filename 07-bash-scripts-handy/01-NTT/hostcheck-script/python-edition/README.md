@@ -30,6 +30,8 @@ Python edition of the local Platform9 host health-check utility.
 6. Runs the NIC-passthrough checks when `vfio_pci` is loaded; otherwise, the section reports that no NIC passthrough settings are configured.
 7. Optionally creates timestamped plain-text, PDF, and JSON reports containing the same sections displayed in the terminal.
 8. Validates the NVMe CLI, required runtime and persistent kernel modules, native multipath, host identity files, and the NVMe subsystems attached to running VMs.
+9. Checks the filesystems backing active PF9 Glance and Cinder services, including minimum capacity and persistent `/etc/fstab` entries for NFS mounts.
+10. Validates PF9 Nova, Cinder, and Glance override-file ownership and reports required Glance Cinder-store parameters without exposing configured secret values.
 
 ### Ubuntu setup
 
@@ -127,6 +129,9 @@ source venv/bin/activate
 # Run only the core NVMe, iSCSI, FC, multipath, and LVM storage checks
 ./hostinfo_check --storage-check
 
+# Add the NVMe configuration check to the selected or default report
+./hostinfo_check --nvme-config
+
 # Write the storage-only report as plain text, PDF, and JSON
 ./hostinfo_check \
   --storage-check \
@@ -162,6 +167,7 @@ sudo /opt/scripts/venv/bin/python /opt/scripts/./hostinfo_check
 | `--all-optional` | No | Runs all optional storage checks, including the per-VM NVMe attachment check, and the complete resource-isolation report, excluding the passwordless-sudo listing. |
 | `--run-all` | No | Runs every non-parameterized check: the default suite, passwordless-sudo listing, standalone storage checks, and complete resource-isolation report. It overrides `--storage-check` and `--resource-isolate-settings`; if `--uuid` is also supplied, that VM check is included. |
 | `--storage-check` | No | Runs only `NVME CONFIGURATION`, `ISCSI INITIATOR`, `FC PORTS`, `ISCSID CONF`, `MULTIPATH BLACKLIST`, and `LVM FILTERS`. |
+| `--nvme-config` | No | Adds `NVME CONFIGURATION` to the default suite, standalone selections, `--uuid`, `check-sudoers`, or `--resource-isolate-settings`. The check is already included by `--storage-check` and `--run-all`. |
 | `--log` | No | Writes `hostcheck-<short-hostname>-<YYYYMMDD_HHMMSS>.log` in the current directory. Mutually exclusive with `--output`. |
 | `--output <FILE>` | No | Writes a timestamped plain-text report derived from `FILE`. Mutually exclusive with `--log`. |
 | `--pdf` | No | Writes `hostcheck-<short-hostname>-<YYYYMMDD_HHMMSS>.pdf`. Requires `reportlab`. |
@@ -183,6 +189,13 @@ Standalone selectors take precedence over `--uuid` and the full suite. Multiple 
 - The FC check inventories remote ports whose role contains `Target`, relates each `rport-*` to its local `hostN`, and reports each target WWPN. An online local FC port with no visible FCP targets is reported as `WARN` with zoning, zoneset, target-port, and fabric guidance.
 - `NVME CONFIGURATION` checks `nvme-cli`, the `nvme_tcp`, `nvme_fabrics`, `nvme_keyring`, `nvme_core`, and `nvme_auth` runtime modules, persistent `nvme_tcp` and `nvme_fabrics` configuration, native NVMe multipath, `/etc/nvme/hostnqn`, and `/etc/nvme/hostid`.
 - `--storage-check` sends the same six storage sections to terminal, plain-text, PDF, and JSON output. A failing storage result still produces requested report files and returns `1`.
+- The default suite no longer runs `NVME CONFIGURATION` unless `--nvme-config` is supplied. `--storage-check` and `--run-all` continue to include it automatically.
+- `PF9 SERVICE FILESYSTEMS` runs only when the corresponding PF9 package is installed and its service is active. It checks `/var/lib/nginx` for at least 50 GiB with active `pf9-glance-api.service`, and `/opt/pf9/pf9-cindervolume-base/state/conversion` for at least 100 GiB with active `pf9-cindervolume-base.service`.
+- PF9 service filesystem checks report the backing source, target, filesystem type, and mount options. NFS-backed paths also require a matching active entry in `/etc/fstab`; missing capacity, mount details, or NFS persistence is reported as `WARN`.
+- Active, installed PF9 roles now report override-file content separately from ownership. Nova, Cinder, and Glance override files are expected to be owned by `pf9:pf9group`; missing optional override files are informational where applicable.
+- An active, installed Glance role validates the required Cinder-store parameter names in `/etc/glance-api.conf`. Password values are reported only as `configured` or `missing` and are not printed.
+- Bond interfaces that are present but do not use `802.3ad` now report `INFO` instead of `WARN`.
+- The NVMe applicability guidance now states that the result can be ignored when the environment does not use NVMe as the workload backend.
 
 ### Sensitive output
 
