@@ -16,6 +16,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
+from urllib.parse import quote, urlsplit
 from xml.sax.saxutils import escape
 
 try:
@@ -33,6 +34,10 @@ except ImportError:
 
 
 DEFAULT_GLANCE_MOUNT = Path("/var/opt/imagelibrary")
+HOST_LIST_PATH = Path("/tmp/host-list.json")
+HOST_LIST_CREATED_PATH: Path | None = None
+CLUSTER_LIST_PATH = Path("/tmp/cluster-list.json")
+CLUSTER_LIST_CREATED_PATH: Path | None = None
 COMMAND_TIMEOUT = 15
 GIB = 1024**3
 SUPPORTED_ACTIONS = {
@@ -41,8 +46,10 @@ SUPPORTED_ACTIONS = {
     "list-nvme-vm",
     "list-vm-mpath",
     "check-glance-mount",
+    "check-control-plane",
 }
 
+REQUIRED_OPENSTACK_ENVIRONMENT = ("OS_USERNAME", "OS_PASSWORD", "OS_AUTH_URL")
 
 @dataclass(frozen=True)
 class CommandResult:
@@ -64,6 +71,10 @@ class CheckResult:
     output: str = ""
     actual: str | None = None
     expected: str | None = None
+    backend_name: str | None = None
+    backend_sections: tuple[str, ...] | None = None
+    hostconfig_name: str | None = None
+    cluster_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -111,6 +122,602 @@ def run_command(
         completed.stdout.strip(),
         completed.stderr.strip(),
     )
+
+
+def required_environment_value(variable_name: str) -> str:
+    """Return a required non-empty environment value without exposing it."""
+
+    value = os.environ.get(variable_name, "").strip()
+    if not value:
+        raise RuntimeError(
+            f"{variable_name} is not defined or is empty; export the OpenStack "
+            "RC file before running check-control-plane"
+        )
+    return value
+
+
+def control_plane_api_url(auth_url: str) -> str:
+    """Build the ResMgr endpoint from the origin in OS_AUTH_URL."""
+
+    parsed_url = urlsplit(auth_url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        raise RuntimeError("OS_AUTH_URL must be a valid HTTP or HTTPS URL")
+    return f"{parsed_url.scheme}://{parsed_url.netloc}/resmgr/v2/blueprint/"
+
+
+def storage_backend_rows(
+    blueprint_name: str,
+    storage_backends: dict[object, object],
+) -> list[CheckResult]:
+    """Return one row for every backend and all of its configured sections."""
+
+    rows: list[CheckResult] = []
+    for backend_name, configured_sections in sorted(
+        storage_backends.items(), key=lambda item: str(item[0]).casefold()
+    ):
+        if not isinstance(configured_sections, dict):
+            rows.append(
+                CheckResult(
+                    name=blueprint_name,
+                    status="FAIL",
+                    output="backend configuration must be a JSON object",
+                    backend_name=str(backend_name),
+                    backend_sections=(),
+                )
+            )
+            continue
+
+        section_names = tuple(
+            sorted(
+                (str(section_name) for section_name in configured_sections),
+                key=str.casefold,
+            )
+        )
+        rows.append(
+            CheckResult(
+                name=blueprint_name,
+                status="OK" if section_names else "WARN",
+                output="-" if section_names else "no backend sections configured",
+                backend_name=str(backend_name),
+                backend_sections=section_names,
+            )
+        )
+    return rows
+
+
+def api_origin(auth_url: str) -> str:
+    """Return the scheme and authority from OS_AUTH_URL."""
+
+    parsed_url = urlsplit(auth_url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        raise RuntimeError("OS_AUTH_URL must be a valid HTTP or HTTPS URL")
+    return f"{parsed_url.scheme}://{parsed_url.netloc}"
+
+
+def fetch_api_json(
+    token: str,
+    url: str,
+    query_name: str,
+) -> tuple[object | None, CheckResult | None]:
+    """Fetch and decode one authenticated JSON API response."""
+
+    curl_result = run_command(
+        [
+            "curl",
+            "--fail-with-body",
+            "--silent",
+            "--show-error",
+            "--request",
+            "GET",
+            "--header",
+            f"X-Auth-Token: {token}",
+            "--header",
+            "Content-Type: application/json",
+            url,
+        ]
+    )
+    if curl_result.returncode != 0:
+        return None, result(
+            query_name,
+            "FAIL",
+            curl_result.stderr or curl_result.stdout or "request failed",
+        )
+    if not curl_result.stdout:
+        return None, None
+
+    try:
+        return json.loads(curl_result.stdout), None
+    except json.JSONDecodeError as error:
+        return None, result(
+            query_name,
+            "FAIL",
+            f"control plane returned invalid JSON: {error}",
+        )
+
+
+def blueprint_rows(payload: object | None) -> list[CheckResult]:
+    """Build blueprint and storage-backend report rows."""
+
+    if payload is None or payload == []:
+        return [
+            result(
+                "Control plane blueprints",
+                "WARN",
+                "No blueprint configuration present",
+            )
+        ]
+
+    if not isinstance(payload, list):
+        return [
+            result(
+                "Control plane blueprints",
+                "FAIL",
+                "expected the control plane response to be a JSON array",
+            )
+        ]
+
+    rows: list[CheckResult] = []
+    for blueprint in payload:
+        if not isinstance(blueprint, dict):
+            return [
+                result(
+                    "Control plane blueprints",
+                    "FAIL",
+                    "each blueprint in the response must be a JSON object",
+                )
+            ]
+
+        name = blueprint.get("name") or "<unnamed>"
+        storage_backends = blueprint.get("storageBackends", {})
+        if storage_backends is None:
+            storage_backends = {}
+        if not isinstance(storage_backends, dict):
+            return [
+                result(
+                    str(name),
+                    "FAIL",
+                    "storageBackends must be a JSON object",
+                )
+            ]
+
+        configured_storage_rows = storage_backend_rows(str(name), storage_backends)
+        if not configured_storage_rows:
+            rows.append(
+                CheckResult(
+                    name=str(name),
+                    status="WARN",
+                    output="no backend storage configuration present",
+                    backend_name="-",
+                    backend_sections=(),
+                )
+            )
+            continue
+        rows.extend(configured_storage_rows)
+    return rows
+
+
+def host_config_rows(
+    payload: object | None,
+) -> tuple[list[CheckResult], list[tuple[str, str]]]:
+    """Build host-config rows and return profile-to-network-label associations."""
+
+    if payload is None or payload == []:
+        return (
+            [
+                result(
+                    "Hostconfig profiles",
+                    "WARN",
+                    "No hostconfig profile present in the blueprint",
+                )
+            ],
+            [],
+        )
+    if not isinstance(payload, list):
+        return (
+            [
+                result(
+                    "Hostconfig profiles",
+                    "FAIL",
+                    "expected the hostconfig response to be a JSON array",
+                )
+            ],
+            [],
+        )
+
+    rows: list[CheckResult] = []
+    profile_labels: list[tuple[str, str]] = []
+    for host_config in payload:
+        if not isinstance(host_config, dict):
+            return (
+                [
+                    result(
+                        "Hostconfig profiles",
+                        "FAIL",
+                        "each hostconfig profile must be a JSON object",
+                    )
+                ],
+                [],
+            )
+        profile_name = str(host_config.get("name") or "<unnamed>")
+        network_labels = host_config.get("networkLabels", {})
+        if network_labels is None:
+            network_labels = {}
+        if not isinstance(network_labels, dict):
+            rows.append(
+                result(profile_name, "FAIL", "networkLabels must be a JSON object")
+            )
+            continue
+
+        label_mappings = [
+            f"{label_name} -> {interface_name}"
+            for label_name, interface_name in sorted(
+                network_labels.items(), key=lambda item: str(item[0]).casefold()
+            )
+        ]
+        profile_labels.extend(
+            (profile_name, str(label_name)) for label_name in network_labels
+        )
+        rows.append(
+            result(
+                profile_name,
+                "OK" if label_mappings else "WARN",
+                (
+                    "\n".join(label_mappings)
+                    if label_mappings
+                    else "no network labels configured"
+                ),
+            )
+        )
+    return rows, profile_labels
+
+
+def host_config_names_by_id(payload: object | None) -> dict[str, str]:
+    """Map each non-empty hostconfig ID to its profile name."""
+
+    if not isinstance(payload, list):
+        return {}
+
+    names_by_id: dict[str, str] = {}
+    for host_config in payload:
+        if not isinstance(host_config, dict):
+            continue
+        host_config_id = str(host_config.get("id") or "").strip()
+        if not host_config_id:
+            continue
+        names_by_id[host_config_id] = str(
+            host_config.get("name") or "<unnamed>"
+        )
+    return names_by_id
+
+
+def write_host_list(payload: object, destination: Path = HOST_LIST_PATH) -> None:
+    """Write the fetched hosts payload to a private temporary JSON file."""
+
+    global HOST_LIST_CREATED_PATH
+
+    open_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        open_flags |= os.O_NOFOLLOW
+    file_descriptor = os.open(destination, open_flags, 0o600)
+    HOST_LIST_CREATED_PATH = destination
+    try:
+        os.fchmod(file_descriptor, 0o600)
+        host_file = os.fdopen(file_descriptor, "w", encoding="utf-8")
+    except Exception:
+        os.close(file_descriptor)
+        raise
+    with host_file:
+        json.dump(payload, host_file, ensure_ascii=False)
+        host_file.write("\n")
+
+
+def remove_host_list() -> None:
+    """Delete the hosts file only when this process created it."""
+
+    global HOST_LIST_CREATED_PATH
+
+    if HOST_LIST_CREATED_PATH is None:
+        return
+    HOST_LIST_CREATED_PATH.unlink(missing_ok=True)
+    HOST_LIST_CREATED_PATH = None
+
+
+def write_cluster_list(
+    payload: object,
+    destination: Path = CLUSTER_LIST_PATH,
+) -> None:
+    """Write the fetched clusters payload to a private temporary JSON file."""
+
+    global CLUSTER_LIST_CREATED_PATH
+
+    open_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        open_flags |= os.O_NOFOLLOW
+    file_descriptor = os.open(destination, open_flags, 0o600)
+    CLUSTER_LIST_CREATED_PATH = destination
+    try:
+        os.fchmod(file_descriptor, 0o600)
+        cluster_file = os.fdopen(file_descriptor, "w", encoding="utf-8")
+    except Exception:
+        os.close(file_descriptor)
+        raise
+    with cluster_file:
+        json.dump(payload, cluster_file, ensure_ascii=False)
+        cluster_file.write("\n")
+
+
+def remove_cluster_list() -> None:
+    """Delete the clusters file only when this process created it."""
+
+    global CLUSTER_LIST_CREATED_PATH
+
+    if CLUSTER_LIST_CREATED_PATH is None:
+        return
+    CLUSTER_LIST_CREATED_PATH.unlink(missing_ok=True)
+    CLUSTER_LIST_CREATED_PATH = None
+
+
+def cluster_names_by_host_id(payload: object) -> dict[str, str]:
+    """Map host UUIDs in cluster hostlists to their cluster names."""
+
+    if not isinstance(payload, list):
+        return {}
+
+    names_by_host_id: dict[str, str] = {}
+    for cluster in payload:
+        if not isinstance(cluster, dict):
+            continue
+        cluster_name = str(cluster.get("name") or "<unnamed>")
+        host_ids = cluster.get("hostlist")
+        if not isinstance(host_ids, list):
+            continue
+        for host_id in host_ids:
+            normalized_host_id = str(host_id or "").strip()
+            if normalized_host_id:
+                names_by_host_id[normalized_host_id] = cluster_name
+    return names_by_host_id
+
+
+def host_list_rows(
+    source: Path,
+    cluster_source: Path,
+    host_config_names: dict[str, str],
+) -> list[CheckResult]:
+    """Resolve hostconfig and cluster names for hosts read from JSON files."""
+
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except OSError as error:
+        return [result("Hosts", "FAIL", f"cannot read {source}: {error}")]
+    except json.JSONDecodeError as error:
+        return [result("Hosts", "FAIL", f"invalid hosts JSON: {error}")]
+
+    try:
+        cluster_payload = json.loads(cluster_source.read_text(encoding="utf-8"))
+    except OSError as error:
+        return [result("Hosts", "FAIL", f"cannot read {cluster_source}: {error}")]
+    except json.JSONDecodeError as error:
+        return [result("Hosts", "FAIL", f"invalid clusters JSON: {error}")]
+
+    if not isinstance(payload, list):
+        return [result("Hosts", "FAIL", "hosts response must be a JSON array")]
+    if not isinstance(cluster_payload, list):
+        return [result("Hosts", "FAIL", "clusters response must be a JSON array")]
+    if not payload:
+        return [result("Hosts", "WARN", "no hosts returned by the control plane")]
+
+    cluster_names = cluster_names_by_host_id(cluster_payload)
+    rows: list[CheckResult] = []
+    for host in payload:
+        if not isinstance(host, dict):
+            rows.append(result("<invalid host>", "FAIL", "host must be a JSON object"))
+            continue
+
+        info = host.get("info")
+        hostname = (
+            str(info.get("hostname") or "<unknown>")
+            if isinstance(info, dict)
+            else "<unknown>"
+        )
+        host_id = str(host.get("id") or "").strip()
+        host_config_id = str(host.get("hostconfig_id") or "").strip()
+        if not host_config_id:
+            host_config_name = "<unset>"
+            status = "WARN"
+        elif host_config_id in host_config_names:
+            host_config_name = host_config_names[host_config_id]
+            status = "OK"
+        else:
+            host_config_name = f"<unresolved: {host_config_id}>"
+            status = "FAIL"
+
+        rows.append(
+            CheckResult(
+                name=hostname,
+                status=status,
+                hostconfig_name=host_config_name,
+                cluster_name=cluster_names.get(host_id, "<unset>"),
+            )
+        )
+    return rows
+
+
+def provider_network_rows(
+    token: str,
+    origin: str,
+    profile_labels: Sequence[tuple[str, str]],
+) -> list[CheckResult]:
+    """Return one provider-network summary row per host-config profile."""
+
+    labels_by_profile: dict[str, list[str]] = {}
+    for profile_name, label_name in profile_labels:
+        profile_labels_list = labels_by_profile.setdefault(profile_name, [])
+        if label_name not in profile_labels_list:
+            profile_labels_list.append(label_name)
+
+    networks_by_label: dict[str, object | CheckResult] = {}
+    for _, label_name in profile_labels:
+        if label_name in networks_by_label:
+            continue
+        encoded_label = quote(label_name, safe="")
+        url = (
+            f"{origin}/neutron/v2.0/networks?"
+            f"provider:physical_network={encoded_label}"
+        )
+        payload, error = fetch_api_json(
+            token,
+            url,
+            f"Provider networks for {label_name}",
+        )
+        networks_by_label[label_name] = error if error is not None else payload
+
+    rows: list[CheckResult] = []
+    for profile_name, label_names in labels_by_profile.items():
+        network_blocks: list[str] = []
+        errors: list[str] = []
+        seen_networks: set[tuple[str, str, str]] = set()
+        for label_name in label_names:
+            response = networks_by_label[label_name]
+            if isinstance(response, CheckResult):
+                errors.append(f"Label {label_name}: {response.output}")
+                continue
+            if response is None:
+                continue
+            if not isinstance(response, dict) or not isinstance(
+                response.get("networks"), list
+            ):
+                errors.append(
+                    f"Label {label_name}: provider network response must "
+                    "contain a networks array"
+                )
+                continue
+
+            for network in response["networks"]:
+                if (
+                    not isinstance(network, dict)
+                    or network.get("provider:physical_network") != label_name
+                ):
+                    continue
+                network_name = str(network.get("name") or "<unnamed>")
+                tenant_id = str(network.get("tenant_id") or "<unset>")
+                network_key = (network_name, tenant_id, label_name)
+                if network_key in seen_networks:
+                    continue
+                seen_networks.add(network_key)
+                network_blocks.append(
+                    f"Network: {network_name}\n"
+                    f"Tenant ID: {tenant_id}\n"
+                    f"Label: {label_name}"
+                )
+
+        if errors:
+            output_parts = network_blocks + errors
+            rows.append(result(profile_name, "FAIL", "\n\n".join(output_parts)))
+        elif network_blocks:
+            rows.append(result(profile_name, "OK", "\n\n".join(network_blocks)))
+        else:
+            rows.append(
+                result(
+                    profile_name,
+                    "WARN",
+                    "no provider network present/configured",
+                )
+            )
+    return rows or [
+        result(
+            "Provider networks",
+            "WARN",
+            "no provider network present/configured",
+        )
+    ]
+
+
+def control_plane_reports(
+    *, include_hosts: bool = False
+) -> list[tuple[str, list[CheckResult]]]:
+    """Return blueprint, host-config, and provider-network report sections."""
+
+    environment = {
+        variable_name: required_environment_value(variable_name)
+        for variable_name in REQUIRED_OPENSTACK_ENVIRONMENT
+    }
+    token_result = run_command(
+        ["openstack", "token", "issue", "-c", "id", "-f", "value"]
+    )
+    if token_result.returncode != 0 or not token_result.stdout:
+        detail = token_result.stderr or token_result.stdout or "empty token returned"
+        return [("CONTROL PLANE", [result("OpenStack token", "FAIL", detail)])]
+
+    origin = api_origin(environment["OS_AUTH_URL"])
+    blueprint_payload, blueprint_error = fetch_api_json(
+        token_result.stdout,
+        f"{origin}/resmgr/v2/blueprint/",
+        "Control plane blueprints",
+    )
+    blueprint_results = (
+        [blueprint_error]
+        if blueprint_error is not None
+        else blueprint_rows(blueprint_payload)
+    )
+
+    host_config_payload, host_config_error = fetch_api_json(
+        token_result.stdout,
+        f"{origin}/resmgr/v2/hostconfigs",
+        "Hostconfig profiles",
+    )
+    if host_config_error is not None:
+        host_config_results = [host_config_error]
+        profile_labels: list[tuple[str, str]] = []
+        host_config_names: dict[str, str] = {}
+    else:
+        host_config_results, profile_labels = host_config_rows(host_config_payload)
+        host_config_names = host_config_names_by_id(host_config_payload)
+
+    reports = [
+        ("STORAGE BACKEND CONFIGURATION", blueprint_results),
+        ("HOSTCONFIG NETWORK LABELS", host_config_results),
+        (
+            "PROVIDER NETWORKS",
+            provider_network_rows(token_result.stdout, origin, profile_labels),
+        ),
+    ]
+    if not include_hosts:
+        return reports
+
+    cluster_payload, cluster_error = fetch_api_json(
+        token_result.stdout,
+        f"{origin}/resmgr/v2/clusters",
+        "Control plane clusters",
+    )
+    if cluster_error is not None:
+        reports.append(("HOSTS", [cluster_error]))
+        return reports
+
+    host_payload, host_error = fetch_api_json(
+        token_result.stdout,
+        f"{origin}/resmgr/v2/hosts",
+        "Control plane hosts",
+    )
+    if host_error is not None:
+        host_results = [host_error]
+    else:
+        try:
+            write_cluster_list(cluster_payload)
+            write_host_list(host_payload)
+            # Release decoded copies before loading potentially large lists.
+            cluster_payload = None
+            host_payload = None
+            host_results = host_list_rows(
+                HOST_LIST_PATH,
+                CLUSTER_LIST_PATH,
+                host_config_names,
+            )
+        except OSError as error:
+            host_results = [
+                result("Hosts", "FAIL", f"cannot write temporary JSON: {error}")
+            ]
+    reports.append(("HOSTS", host_results))
+    return reports
 
 
 def command_path(command: str) -> str | None:
@@ -404,7 +1011,7 @@ def check_glance_mount(directory: Path) -> list[CheckResult]:
     rows.append(
         comparison_result(
             "Glance mount permissions",
-            "OK" if mode == "744" else "FAIL",
+            "OK" if mode == "744" else "WARN",
             mode,
             "744",
             str(normalized),
@@ -1021,7 +1628,7 @@ def check_multipath_blacklist() -> list[CheckResult]:
     rows.append(
         comparison_result(
             "defaults.checker_timeout",
-            "OK" if actual == "15" else ("WARN" if actual else "FAIL"),
+            "OK" if actual == "15" else "WARN",
             actual,
             "15",
         )
@@ -2276,10 +2883,16 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="CHECK",
         help=(
             "optional standalone check: check-sudoers, check-mpath-orphan, "
-            "list-nvme-vm, list-vm-mpath, or check-glance-mount"
+            "list-nvme-vm, list-vm-mpath, check-glance-mount, or "
+            "check-control-plane"
         ),
     )
     parser.add_argument("--virsh", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--hosts",
+        action="store_true",
+        help="include host, hostconfig profile, and cluster mappings; requires check-control-plane",
+    )
     parser.add_argument("--uuid", help="check one virsh VM and its multipath disks")
     parser.add_argument(
         "--all-optional",
@@ -2295,7 +2908,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "run every non-parameterized check, including passwordless sudo, "
-            "standalone storage checks, and resource-isolation checks"
+            "standalone storage checks, and resource-isolation checks; "
+            "check-control-plane is excluded"
         ),
     )
     parser.add_argument(
@@ -2410,6 +3024,12 @@ def report_name_column(title: str) -> str:
 
     if title == "VM NVME ATTACHMENTS":
         return "VM UUID->root Disk"
+    if title in {"HOSTCONFIG NETWORK LABELS", "PROVIDER NETWORKS"}:
+        return "Hostconfig Profile"
+    if title == "STORAGE BACKEND CONFIGURATION":
+        return "Blueprint"
+    if title == "HOSTS":
+        return "Hostname"
     return "Check"
 
 
@@ -2425,12 +3045,33 @@ def render_section(console: Console, title: str, rows: Iterable[CheckResult]) ->
     table.add_column(
         report_name_column(title), style="bold cyan", no_wrap=True, ratio=1
     )
-    status_width = 20 if title == "VM DISK MULTIPATH" else 8
-    table.add_column("Status", justify="center", no_wrap=True, width=status_width)
-    table.add_column("Output", overflow="fold", ratio=3)
+    if title == "STORAGE BACKEND CONFIGURATION":
+        table.add_column("Backend Name", style="bold", overflow="fold", ratio=1)
+        table.add_column("Sections", overflow="fold", ratio=2)
+    elif title == "HOSTS":
+        table.add_column("Hostconfig Profile", overflow="fold", ratio=2)
+        table.add_column("Cluster Name", overflow="fold", ratio=2)
+    else:
+        status_width = 20 if title == "VM DISK MULTIPATH" else 8
+        table.add_column("Status", justify="center", no_wrap=True, width=status_width)
+        table.add_column("Output", overflow="fold", ratio=3)
     for row in rows:
         output = comparison_table(row) if row.expected is not None else row.output or "-"
-        table.add_row(row.name, status_text(row.status), output)
+        if title == "STORAGE BACKEND CONFIGURATION":
+            sections = "\n".join(row.backend_sections or ()) or row.output or "-"
+            table.add_row(
+                row.name,
+                row.backend_name or "-",
+                sections,
+            )
+        elif title == "HOSTS":
+            table.add_row(
+                row.name,
+                row.hostconfig_name or "-",
+                row.cluster_name or row.output or "-",
+            )
+        else:
+            table.add_row(row.name, status_text(row.status), output)
     console.print(table)
     console.print()
 
@@ -2651,13 +3292,43 @@ def write_pdf_report(
                 ),
             )
         )
-        table_data: list[list[object]] = [
-            [
-                Paragraph(report_name_column(section_title), header_style),
-                Paragraph("Status", header_style),
-                Paragraph("Output", header_style),
+        is_blueprint_section = section_title == "STORAGE BACKEND CONFIGURATION"
+        is_hosts_section = section_title == "HOSTS"
+        section_column_widths = column_widths
+        if is_blueprint_section:
+            section_column_widths = [
+                available_width * 0.25,
+                available_width * 0.30,
+                available_width * 0.45,
             ]
-        ]
+            table_data: list[list[object]] = [
+                [
+                    Paragraph("Blueprint", header_style),
+                    Paragraph("Backend Name", header_style),
+                    Paragraph("Sections", header_style),
+                ]
+            ]
+        elif is_hosts_section:
+            section_column_widths = [
+                available_width * 0.30,
+                available_width * 0.40,
+                available_width * 0.30,
+            ]
+            table_data = [
+                [
+                    Paragraph("Hostname", header_style),
+                    Paragraph("Hostconfig Profile", header_style),
+                    Paragraph("Cluster Name", header_style),
+                ]
+            ]
+        else:
+            table_data = [
+                [
+                    Paragraph(report_name_column(section_title), header_style),
+                    Paragraph("Status", header_style),
+                    Paragraph("Output", header_style),
+                ]
+            ]
         for row in rows:
             if row.expected is not None:
                 actual_color = status_colors.get(row.status, colors.HexColor("#0f172a"))
@@ -2714,14 +3385,42 @@ def write_pdf_report(
                 )
                 continue
 
-            chunks = chunk_report_output(row.output or "-")
-            for chunk_index, chunk in enumerate(chunks):
+            if is_blueprint_section:
+                sections = "\n".join(row.backend_sections or ()) or row.output or "-"
                 table_data.append(
                     [
+                        Paragraph(pdf_paragraph_text(row.name), check_style),
                         Paragraph(
-                            pdf_paragraph_text(row.name if chunk_index == 0 else "(continued)"),
-                            check_style,
+                            pdf_paragraph_text(row.backend_name or "-"), body_style
                         ),
+                        Paragraph(pdf_paragraph_text(sections), body_style),
+                    ]
+                )
+                continue
+
+            if is_hosts_section:
+                table_data.append(
+                    [
+                        Paragraph(pdf_paragraph_text(row.name), check_style),
+                        Paragraph(
+                            pdf_paragraph_text(row.hostconfig_name or "-"), body_style
+                        ),
+                        Paragraph(
+                            pdf_paragraph_text(
+                                row.cluster_name or row.output or "-"
+                            ),
+                            body_style,
+                        ),
+                    ]
+                )
+                continue
+
+            chunks = chunk_report_output(row.output or "-")
+            for chunk_index, chunk in enumerate(chunks):
+                row_name = row.name if chunk_index == 0 else "(continued)"
+                table_data.append(
+                    [
+                        Paragraph(pdf_paragraph_text(row_name), check_style),
                         status_paragraph(row.status if chunk_index == 0 else ""),
                         Paragraph(pdf_paragraph_text(chunk), body_style),
                     ]
@@ -2740,7 +3439,7 @@ def write_pdf_report(
         story.append(
             LongTable(
                 table_data,
-                colWidths=column_widths,
+                colWidths=section_column_widths,
                 repeatRows=1,
                 splitByRow=1,
                 style=TableStyle(table_style),
@@ -2804,6 +3503,10 @@ def write_json_report(
                         "status": row.status,
                         "actual": row.actual,
                         "expected": row.expected,
+                        "backend_name": row.backend_name,
+                        "backend_sections": row.backend_sections,
+                        "hostconfig_name": row.hostconfig_name,
+                        "cluster_name": row.cluster_name,
                         "output": row.output,
                     }
                     for row in rows
@@ -2844,8 +3547,14 @@ def run_selected_checks(
     if arguments.storage_check and not arguments.run_all:
         return storage_reports(include_nvme=True)
 
-    actions = set(SUPPORTED_ACTIONS) if arguments.run_all else set(arguments.actions)
+    actions = (
+        set(SUPPORTED_ACTIONS) - {"check-control-plane"}
+        if arguments.run_all
+        else set(arguments.actions)
+    )
     run_all_optional = arguments.all_optional or arguments.run_all
+    if actions == {"check-control-plane"} and not run_all_optional:
+        return control_plane_reports(include_hosts=arguments.hosts)
     if actions == {"check-sudoers"} and not run_all_optional:
         reports = [("PASSWORDLESS SUDO", check_sudoers())]
         if arguments.nvme_config:
@@ -2858,6 +3567,7 @@ def run_selected_checks(
         "list-nvme-vm",
         "list-vm-mpath",
         "check-glance-mount",
+        "check-control-plane",
     }
     if run_all_optional:
         standalone.update(
@@ -2879,6 +3589,8 @@ def run_selected_checks(
             reports.append(
                 ("GLANCE IMAGE MOUNT", check_glance_mount(arguments.glance_mount_dir))
             )
+        if "check-control-plane" in standalone:
+            reports.extend(control_plane_reports(include_hosts=arguments.hosts))
         if not run_all_optional:
             if arguments.nvme_config:
                 reports.append(("NVME CONFIGURATION", check_nvme_configuration()))
@@ -2934,6 +3646,24 @@ def main() -> int:
     parser = build_parser()
     arguments = parser.parse_args(normalize_legacy_arguments(sys.argv[1:]))
     arguments.actions = validate_actions(parser, arguments.actions)
+    if arguments.hosts and "check-control-plane" not in arguments.actions:
+        parser.error("--hosts requires the check-control-plane argument")
+    if arguments.hosts and arguments.run_all:
+        parser.error("--hosts cannot be combined with --run-all")
+    if arguments.hosts and arguments.storage_check and not arguments.run_all:
+        parser.error("--hosts cannot be combined with --storage-check")
+    if (
+        arguments.hosts
+        and arguments.resource_isolate_settings
+        and not arguments.run_all
+    ):
+        parser.error("--hosts cannot be combined with --resource-isolate-settings")
+    if "check-control-plane" in arguments.actions and not arguments.run_all:
+        try:
+            for variable_name in REQUIRED_OPENSTACK_ENVIRONMENT:
+                required_environment_value(variable_name)
+        except RuntimeError as error:
+            parser.exit(2, f"ERROR: {error}\n")
     sudoers_only = (
         arguments.actions == ["check-sudoers"]
         and not arguments.all_optional
@@ -2972,6 +3702,16 @@ def main() -> int:
         render_report_metadata(console, host_name, generated_at)
     for title, rows in reports:
         render_section(console, title, rows)
+    if arguments.hosts:
+        try:
+            remove_host_list()
+            remove_cluster_list()
+        except OSError as error:
+            console.print(
+                "[bold red]ERROR:[/bold red] cannot delete temporary JSON "
+                f"resource: {error}"
+            )
+            return 2
 
     text_destination = text_output_path(arguments, generated_at, host_name)
     if text_destination:

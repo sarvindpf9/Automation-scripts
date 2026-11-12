@@ -17,7 +17,8 @@ Python edition of the local Platform9 host health-check utility.
 - Python packages from `requirements.txt`: `setuptools`, `python-openstackclient`, `requests`, `reportlab`, and `rich`
 - A readable `/etc/os-release`; supported OS IDs are `ubuntu`, `rocky`, `rhel`, and `almalinux`
 - `dpkg-query` on Ubuntu or `rpm` on Rocky Linux, RHEL, and AlmaLinux
-- Host utilities used by individual checks, including `ip`, `timedatectl`, `systemctl`, `grpck`, `getent`, `iscsiadm`, `nvme`, `multipath`, `ovs-vsctl`, `virsh`, `readlink`, and `stat`
+- Host utilities used by individual checks, including `ip`, `timedatectl`, `systemctl`, `grpck`, `getent`, `iscsiadm`, `nvme`, `multipath`, `ovs-vsctl`, `virsh`, `readlink`, `stat`, and `curl`
+- The `check-control-plane` action requires a sourced OpenStack RC file with non-empty `OS_USERNAME`, `OS_PASSWORD`, and `OS_AUTH_URL` values, plus a working `openstack` CLI that can issue an authentication token
 - Root or equivalent read access is recommended because the checks inspect system, Platform9, libvirt, multipath, iSCSI, sudoers, account, `/etc/hosts`, and `/etc/fstab` data
 
 **What it does:**
@@ -32,6 +33,7 @@ Python edition of the local Platform9 host health-check utility.
 8. Validates the NVMe CLI, required runtime and persistent kernel modules, native multipath, host identity files, and the NVMe subsystems attached to running VMs.
 9. Checks the filesystems backing active PF9 Glance and Cinder services, including minimum capacity and persistent `/etc/fstab` entries for NFS mounts.
 10. Validates PF9 Nova, Cinder, and Glance override-file ownership and reports required Glance Cinder-store parameters without exposing configured secret values.
+11. Optionally queries Platform9 control-plane APIs for blueprint storage backends, hostconfig network labels, and matching Neutron provider networks. With `--hosts`, it also maps hosts to hostconfig profiles and clusters.
 
 ### Ubuntu setup
 
@@ -114,6 +116,13 @@ source venv/bin/activate
   check-glance-mount \
   <GLANCE_MOUNT_DIRECTORY>
 
+# Inspect control-plane storage, hostconfig, and provider-network configuration
+source <OPENSTACK_RC_FILE>
+./hostinfo_check check-control-plane
+
+# Include host-to-hostconfig-profile and host-to-cluster mappings
+./hostinfo_check check-control-plane --hosts
+
 # Inspect one VM by UUID
 ./hostinfo_check --uuid <VM_UUID>
 
@@ -150,6 +159,69 @@ The same commands can be executed without sourcing the venv by following way of 
 sudo /opt/scripts/venv/bin/python /opt/scripts/./hostinfo_check 
 ```
 
+### `check-control-plane`
+
+The `check-control-plane` argument uses the OpenStack CLI to obtain an authentication token, then queries the Platform9 control-plane APIs. It reports blueprint storage backends, hostconfig network-label mappings, and Neutron provider networks. Add `--hosts` to include each host's hostconfig profile and cluster.
+
+The OpenStack RC file must be sourced in the same shell that launches `hostinfo_check`. Running the RC file as a separate process does not retain its exported variables in the current shell.
+
+1. Change to the installed host-check directory and activate its Python environment:
+
+   ```bash
+   # Activate the installed host-check environment
+   cd /opt/scripts/hostcheck-tool-install
+   source venv/bin/activate
+   ```
+
+2. Confirm that the environment-specific RC file exists and is readable:
+
+   ```bash
+   # Replace the placeholder with the downloaded OpenStack RC file path
+   test -r <OPENSTACK_RC_FILEPATH>
+   ```
+
+3. Source the RC file into the current shell. If the RC file prompts for a password, enter it interactively; do not add the password to this README or command history.
+
+   ```bash
+   # Load the OpenStack authentication environment into the current shell
+   source <OPENSTACK_RC_FILEPATH>
+   ```
+
+4. Verify that the three variables required directly by `hostinfo_check` are set without displaying their values:
+
+   ```bash
+   # Verify required variables without exposing credentials
+   for variable_name in OS_USERNAME OS_PASSWORD OS_AUTH_URL; do
+     if [ -n "${!variable_name:-}" ]; then
+       printf '%s: set\n' "${variable_name}"
+     else
+       printf '%s: missing or empty\n' "${variable_name}" >&2
+     fi
+   done
+   ```
+
+   The sourced RC file may need additional variables for the deployment's OpenStack authentication method. The `openstack token issue` command must succeed before the control-plane queries can run.
+
+5. Run the control-plane report:
+
+   ```bash
+   # Report storage backends, hostconfig network labels, and provider networks
+   ./hostinfo_check check-control-plane
+   ```
+
+6. Optionally include host mappings:
+
+   ```bash
+   # Also map hosts to hostconfig profiles and clusters
+   ./hostinfo_check check-control-plane --hosts
+   ```
+
+   `--hosts` requires `check-control-plane` and cannot be combined with `--run-all`, `--storage-check`, or `--resource-isolate-settings`. The script stores the host and cluster API responses temporarily in `/tmp/host-list.json` and `/tmp/cluster-list.json` with mode `0600`, then removes the files it created after rendering the report.
+
+If the script must be run from an approved root shell, source the OpenStack RC file again inside that same root shell before executing the command. Do not assume that `sudo` preserves the caller's OpenStack environment.
+
+**The `check-control-plane` option can be executed from any remote jump host that can reach to the management plane and has the openstack commandline along with the openstack.rc file available.**
+
 ### Options
 
 | Flag | Required | Description |
@@ -160,6 +232,8 @@ sudo /opt/scripts/venv/bin/python /opt/scripts/./hostinfo_check
 | `list-nvme-vm` | No | Maps disks attached to running VMs to NVMe subsystems and verifies that each subsystem host NQN matches `/etc/nvme/hostnqn`. Non-NVMe disks are identified without failing the check. |
 | `list-vm-mpath` | No | Inspects every disk attached to each running VM and reports its dm-multipath mapping and path state, or identifies it as a non-multipath disk. |
 | `check-glance-mount` | No | Runs the standalone Glance mount check. It accepts an optional positional directory or `--glance-mount-dir`. |
+| `check-control-plane` | No | Queries the Platform9 control plane and reports blueprint storage backends, hostconfig network-label mappings, and matching Neutron provider networks. Requires `OS_USERNAME`, `OS_PASSWORD`, and `OS_AUTH_URL` from a sourced OpenStack RC file. |
+| `--hosts` | No | Adds hostname, hostconfig-profile, and cluster mappings to `check-control-plane`. It requires that action and cannot be combined with `--run-all`, `--storage-check`, or `--resource-isolate-settings`. |
 | `--glance-mount-dir <DIRECTORY>` | No | Sets the Glance mount directory. The default is `/var/opt/imagelibrary`. |
 | `--uuid <VM_UUID>` | No | Runs the single-VM libvirt and multipath check when no standalone storage selector is present. |
 | `--virsh` | No | Hidden compatibility flag accepted by the parser. It does not alter check selection or report content. |
@@ -173,7 +247,7 @@ sudo /opt/scripts/venv/bin/python /opt/scripts/./hostinfo_check
 | `--pdf` | No | Writes `hostcheck-<short-hostname>-<YYYYMMDD_HHMMSS>.pdf`. Requires `reportlab`. |
 | `--json` | No | Writes `hostcheck-<short-hostname>-<YYYYMMDD_HHMMSS>.json`. |
 
-Standalone selectors take precedence over `--uuid` and the full suite. Multiple standalone selectors can be supplied together. `--resource-isolate-settings` runs only its specific report. `--all-optional` includes the standalone storage checks and the complete resource-isolation report in the full suite. Unless `--run-all` is present, `--storage-check` takes precedence when combined with other selection flags, including `--all-optional`, and runs only its six core storage sections. `--run-all` overrides the storage-only and resource-isolation-only modes. `--pdf` and `--json` can be combined with terminal-only output, `--log`, or `--output`; every requested format receives the same collected check sections.
+Standalone selectors take precedence over `--uuid` and the full suite. Multiple standalone selectors can be supplied together. `check-control-plane` can run alone or alongside other standalone actions, but it is intentionally excluded from `--run-all`. `--resource-isolate-settings` runs only its specific report. `--all-optional` includes the standalone storage checks and the complete resource-isolation report in the full suite. Unless `--run-all` is present, `--storage-check` takes precedence when combined with other selection flags, including `--all-optional`, and runs only its six core storage sections. `--run-all` overrides the storage-only and resource-isolation-only modes. `--pdf` and `--json` can be combined with terminal-only output, `--log`, or `--output`; every requested format receives the same collected check sections.
 
 ### Output and exit behaviour
 
@@ -181,7 +255,12 @@ Standalone selectors take precedence over `--uuid` and the full suite. Multiple 
 - A successful run returns `0` only when no check reports `FAIL` or `ERROR`.
 - A completed report containing at least one `FAIL` or `ERROR` returns `1`.
 - Initialization, report-writing, and dependency errors return `2`.
+- `check-control-plane` exits with an initialization error when a required OpenStack environment variable is empty or missing. API, authentication, response-format, and unresolved hostconfig failures appear in the report and affect the normal report exit status.
+- `check-control-plane --hosts` writes API responses temporarily to `/tmp/host-list.json` and `/tmp/cluster-list.json` with mode `0600`, then removes files created by the process after rendering the report.
+- Control-plane terminal and PDF reports use dedicated columns for storage backends and host mappings. JSON checks additionally expose `backend_name`, `backend_sections`, `hostconfig_name`, and `cluster_name` fields.
 - An unset LVM `filter` and `global_filter` is reported as `WARN`; a missing or unreadable `/etc/lvm/lvm.conf` remains `FAIL`.
+- A Glance mount permission mismatch from the expected mode `744` is reported as `WARN`.
+- A missing or non-`15` multipath `defaults.checker_timeout` value is reported as `WARN`.
 - Missing PF9 rsyslog configuration or rules are reported as `WARN`.
 - `/etc/fstab` is included in the default report. An unreadable file is reported as `FAIL`.
 - The default suite conditionally includes resource-isolation sections based on `/proc/cmdline` and the loaded `vfio_pci` module. Skipped sections remain visible with an `INFO` result explaining why they were skipped.
@@ -205,8 +284,9 @@ Terminal and generated reports can expose infrastructure and account details. St
 - help section output:
 ```
 ./hostinfo_check -h
-usage: hostinfo_check.py [-h] [--uuid UUID] [--all-optional]
-                         [--resource-isolate-settings] [--storage-check]
+usage: hostinfo_check.py [-h] [--hosts] [--uuid UUID] [--all-optional]
+                         [--run-all] [--resource-isolate-settings]
+                         [--storage-check] [--nvme-config]
                          [--glance-mount-dir GLANCE_MOUNT_DIR]
                          [--log | --output OUTPUT] [--pdf] [--json]
                          [CHECK ...]
@@ -214,21 +294,29 @@ usage: hostinfo_check.py [-h] [--uuid UUID] [--all-optional]
 Run Platform9 host readiness and storage checks.
 
 positional arguments:
-  CHECK                 optional standalone check: check-sudoers, check-mpath-orphan, list-vm-mpath, or check-glance-mount (default: None)
+  CHECK                 optional standalone check: check-sudoers, check-mpath-
+                        orphan, list-nvme-vm, list-vm-mpath, check-glance-mount,
+                        or check-control-plane (default: None)
 
 options:
   -h, --help            show this help message and exit
+  --hosts               include host, hostconfig profile, and cluster mappings;
+                        requires check-control-plane (default: False)
   --uuid UUID           check one virsh VM and its multipath disks (default: None)
   --all-optional        run all optional checks, including resource-isolation
                         settings, except the passwordless sudo user listing;
                         results are included in requested log, JSON, and PDF
                         reports (default: False)
+  --run-all             run every non-parameterized check, including passwordless
+                        sudo, standalone storage checks, and resource-isolation
+                        checks; check-control-plane is excluded (default: False)
   --resource-isolate-settings
                         run only CPU, hugepage, IRQ, KVM, and PCI passthrough
                         checks (default: False)
-  --storage-check       run only iSCSI initiator, FC ports, iscsid
-                        configuration, multipath blacklist, and LVM filter
-                        checks (default: False)
+  --storage-check       run only NVMe, iSCSI initiator, FC ports, iscsid
+                        configuration, multipath blacklist, and LVM filter checks
+                        (default: False)
+  --nvme-config         include the NVMe configuration check (default: False)
   --glance-mount-dir GLANCE_MOUNT_DIR
                         directory used by check-glance-mount (default: /var/opt/imagelibrary)
   --log                 write a timestamped plain-text copy of the report (default: False)
@@ -314,7 +402,7 @@ GLANCE IMAGE MOUNT
 ├──────────────────────────┼──────────┼──────────────────────────────┤
 │ Glance mount mapping     │    OK    │ /var/opt/imagelibrary/data   │
 ├──────────────────────────┼──────────┼──────────────────────────────┤
-│ Glance mount permissions │   FAIL   │ ╭────────┬──────────╮        │
+│ Glance mount permissions │   WARN   │ ╭────────┬──────────╮        │
 │                          │          │ │ Actual │ Expected │        │
 │                          │          │ ├────────┼──────────┤        │
 │                          │          │ │ 755    │ 744      │        │
@@ -479,7 +567,7 @@ MULTIPATH BLACKLIST
 ╭──────────────────────────┬──────────┬────────────────────────────╮
 │ Check                    │  Status  │ Output                     │
 ├──────────────────────────┼──────────┼────────────────────────────┤
-│ defaults.checker_timeout │   FAIL   │ ╭────────┬──────────╮      │
+│ defaults.checker_timeout │   WARN   │ ╭────────┬──────────╮      │
 │                          │          │ │ Actual │ Expected │      │
 │                          │          │ ├────────┼──────────┤      │
 │                          │          │ │ unset  │ 15       │      │
@@ -846,4 +934,73 @@ FC PORTS
 │ FC ports │  WARN  │ no FC ports found on this node                       │
 │          │        │ (/sys/class/fc_host/host* absent)                    │
 ╰──────────┴────────┴──────────────────────────────────────────────────────╯
+```
+
+- Sample output with `check-control-plane` and `--hosts` option:
+```
+./hostinfo_check_v7 check-control-plane --hosts
+hostInfo-check                            
+╭──────────────┬─────────────────────────╮
+│ Host Name    │ Report Time             │
+├──────────────┼─────────────────────────┤
+│ hl-u24-host1 │ 2026-11-12 14:26:37 UTC │
+╰──────────────┴─────────────────────────╯
+
+STORAGE BACKEND CONFIGURATION                             
+╭─────────────────┬───────────────────┬──────────────────╮
+│ Blueprint       │ Backend Name      │ Sections         │
+├─────────────────┼───────────────────┼──────────────────┤
+│ homelab-cluster │ hl-nfsv4-backend1 │ hl-nfsv4-backend │
+╰─────────────────┴───────────────────┴──────────────────╯
+
+HOSTCONFIG NETWORK LABELS                              
+╭─────────────────────┬──────────┬────────────────────╮
+│ Hostconfig Profile  │  Status  │ Output             │
+├─────────────────────┼──────────┼────────────────────┤
+│ pf9os-hl-profile-v1 │    OK    │ mgmt -> ens18      │
+│                     │          │ vmnet -> ens19     │
+├─────────────────────┼──────────┼────────────────────┤
+│ u24-hl-config1      │    OK    │ mgmt -> ens18      │
+│                     │          │ migtest -> vlan510 │
+│                     │          │ vmnet -> ens19     │
+├─────────────────────┼──────────┼────────────────────┤
+│ u24-passth-cfg1     │    OK    │ mgmt -> enp7s18    │
+│                     │          │ vmnet -> enp7s19   │
+╰─────────────────────┴──────────┴────────────────────╯
+
+PROVIDER NETWORKS                                                               
+╭─────────────────────┬──────────┬─────────────────────────────────────────────╮
+│ Hostconfig Profile  │  Status  │ Output                                      │
+├─────────────────────┼──────────┼─────────────────────────────────────────────┤
+│ pf9os-hl-profile-v1 │    OK    │ Network: hl-provider-510                    │
+│                     │          │ Tenant ID: 3243aebbb412467da80fdf6d44420eec │
+│                     │          │ Label: vmnet                                │
+├─────────────────────┼──────────┼─────────────────────────────────────────────┤
+│ u24-hl-config1      │    OK    │ Network: hl-provider-510-flt                │
+│                     │          │ Tenant ID: 3243aebbb412467da80fdf6d44420eec │
+│                     │          │ Label: migtest                              │
+│                     │          │                                             │
+│                     │          │ Network: hl-provider-510                    │
+│                     │          │ Tenant ID: 3243aebbb412467da80fdf6d44420eec │
+│                     │          │ Label: vmnet                                │
+├─────────────────────┼──────────┼─────────────────────────────────────────────┤
+│ u24-passth-cfg1     │    OK    │ Network: hl-provider-510                    │
+│                     │          │ Tenant ID: 3243aebbb412467da80fdf6d44420eec │
+│                     │          │ Label: vmnet                                │
+╰─────────────────────┴──────────┴─────────────────────────────────────────────╯
+
+HOSTS                                                      
+╭──────────────┬─────────────────────┬────────────────────╮
+│ Hostname     │ Hostconfig Profile  │ Cluster Name       │
+├──────────────┼─────────────────────┼────────────────────┤
+│ hl-pf9os-01  │ pf9os-hl-profile-v1 │ pf9-rocky-cl1      │
+├──────────────┼─────────────────────┼────────────────────┤
+│ hl-pf9os-02  │ pf9os-hl-profile-v1 │ pf9-rocky-cl1      │
+├──────────────┼─────────────────────┼────────────────────┤
+│ hl-u24-host1 │ u24-hl-config1      │ u24-test-cl1       │
+├──────────────┼─────────────────────┼────────────────────┤
+│ hl-u24-host2 │ u24-hl-config1      │ u24-test-cl1       │
+├──────────────┼─────────────────────┼────────────────────┤
+│ hl-u24-host3 │ u24-passth-cfg1     │ u24-passth-cluster │
+╰──────────────┴─────────────────────┴────────────────────╯
 ```
