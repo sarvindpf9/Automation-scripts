@@ -92,6 +92,7 @@ def run_command(
     *,
     timeout: int = COMMAND_TIMEOUT,
     input_text: str | None = None,
+    environment: dict[str, str] | None = None,
 ) -> CommandResult:
     """Run an external command without invoking a shell."""
 
@@ -104,6 +105,7 @@ def run_command(
             text=True,
             input=input_text,
             timeout=timeout,
+            env=environment,
         )
     except FileNotFoundError:
         return CommandResult(command, 127, "", f"command not found: {command[0]}")
@@ -547,13 +549,7 @@ def provider_network_rows(
     origin: str,
     profile_labels: Sequence[tuple[str, str]],
 ) -> list[CheckResult]:
-    """Return one provider-network summary row per host-config profile."""
-
-    labels_by_profile: dict[str, list[str]] = {}
-    for profile_name, label_name in profile_labels:
-        profile_labels_list = labels_by_profile.setdefault(profile_name, [])
-        if label_name not in profile_labels_list:
-            profile_labels_list.append(label_name)
+    """Return one provider-network summary row per unique network label."""
 
     networks_by_label: dict[str, object | CheckResult] = {}
     for _, label_name in profile_labels:
@@ -572,57 +568,44 @@ def provider_network_rows(
         networks_by_label[label_name] = error if error is not None else payload
 
     rows: list[CheckResult] = []
-    for profile_name, label_names in labels_by_profile.items():
+    for label_name, response in networks_by_label.items():
         network_blocks: list[str] = []
-        errors: list[str] = []
-        seen_networks: set[tuple[str, str, str]] = set()
-        for label_name in label_names:
-            response = networks_by_label[label_name]
-            if isinstance(response, CheckResult):
-                errors.append(f"Label {label_name}: {response.output}")
-                continue
-            if response is None:
-                continue
-            if not isinstance(response, dict) or not isinstance(
-                response.get("networks"), list
-            ):
-                errors.append(
-                    f"Label {label_name}: provider network response must "
-                    "contain a networks array"
-                )
-                continue
-
-            for network in response["networks"]:
-                if (
-                    not isinstance(network, dict)
-                    or network.get("provider:physical_network") != label_name
-                ):
-                    continue
-                network_name = str(network.get("name") or "<unnamed>")
-                tenant_id = str(network.get("tenant_id") or "<unset>")
-                network_key = (network_name, tenant_id, label_name)
-                if network_key in seen_networks:
-                    continue
-                seen_networks.add(network_key)
-                network_blocks.append(
-                    f"Network: {network_name}\n"
-                    f"Tenant ID: {tenant_id}\n"
-                    f"Label: {label_name}"
-                )
-
-        if errors:
-            output_parts = network_blocks + errors
-            rows.append(result(profile_name, "FAIL", "\n\n".join(output_parts)))
-        elif network_blocks:
-            rows.append(result(profile_name, "OK", "\n\n".join(network_blocks)))
-        else:
+        if isinstance(response, CheckResult):
+            rows.append(result(label_name, "FAIL", response.output))
+            continue
+        if response is None:
+            continue
+        if not isinstance(response, dict) or not isinstance(
+            response.get("networks"), list
+        ):
             rows.append(
                 result(
-                    profile_name,
-                    "WARN",
-                    "no provider network present/configured",
+                    label_name,
+                    "FAIL",
+                    "provider network response must contain a networks array",
                 )
             )
+            continue
+
+        seen_networks: set[tuple[str, str]] = set()
+        for network in response["networks"]:
+            if (
+                not isinstance(network, dict)
+                or network.get("provider:physical_network") != label_name
+            ):
+                continue
+            network_name = str(network.get("name") or "<unnamed>")
+            tenant_id = str(network.get("tenant_id") or "<unset>")
+            network_key = (network_name, tenant_id)
+            if network_key in seen_networks:
+                continue
+            seen_networks.add(network_key)
+            network_blocks.append(
+                f"Network: {network_name}\nTenant ID: {tenant_id}"
+            )
+
+        if network_blocks:
+            rows.append(result(label_name, "OK", "\n\n".join(network_blocks)))
     return rows or [
         result(
             "Provider networks",
@@ -633,7 +616,7 @@ def provider_network_rows(
 
 
 def control_plane_reports(
-    *, include_hosts: bool = False
+    *, include_hosts: bool = False, region: str | None = None
 ) -> list[tuple[str, list[CheckResult]]]:
     """Return blueprint, host-config, and provider-network report sections."""
 
@@ -641,8 +624,29 @@ def control_plane_reports(
         variable_name: required_environment_value(variable_name)
         for variable_name in REQUIRED_OPENSTACK_ENVIRONMENT
     }
+    command_environment = None
+    if region is not None:
+        command_environment = os.environ.copy()
+        command_environment["OS_REGION_NAME"] = region
+        region_result = run_command(
+            ["openstack", "region", "show", region],
+            environment=command_environment,
+        )
+        if region_result.returncode != 0:
+            detail = (
+                region_result.stderr
+                or region_result.stdout
+                or "region lookup failed"
+            )
+            return [
+                (
+                    "CONTROL PLANE",
+                    [result(f"OpenStack region {region}", "FAIL", detail)],
+                )
+            ]
     token_result = run_command(
-        ["openstack", "token", "issue", "-c", "id", "-f", "value"]
+        ["openstack", "token", "issue", "-c", "id", "-f", "value"],
+        environment=command_environment,
     )
     if token_result.returncode != 0 or not token_result.stdout:
         detail = token_result.stderr or token_result.stdout or "empty token returned"
@@ -2893,6 +2897,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="include host, hostconfig profile, and cluster mappings; requires check-control-plane",
     )
+    parser.add_argument(
+        "--region",
+        help="OpenStack region for check-control-plane; defaults to OS_REGION_NAME",
+    )
     parser.add_argument("--uuid", help="check one virsh VM and its multipath disks")
     parser.add_argument(
         "--all-optional",
@@ -3024,8 +3032,10 @@ def report_name_column(title: str) -> str:
 
     if title == "VM NVME ATTACHMENTS":
         return "VM UUID->root Disk"
-    if title in {"HOSTCONFIG NETWORK LABELS", "PROVIDER NETWORKS"}:
+    if title == "HOSTCONFIG NETWORK LABELS":
         return "Hostconfig Profile"
+    if title == "PROVIDER NETWORKS":
+        return "Network Label"
     if title == "STORAGE BACKEND CONFIGURATION":
         return "Blueprint"
     if title == "HOSTS":
@@ -3554,7 +3564,10 @@ def run_selected_checks(
     )
     run_all_optional = arguments.all_optional or arguments.run_all
     if actions == {"check-control-plane"} and not run_all_optional:
-        return control_plane_reports(include_hosts=arguments.hosts)
+        return control_plane_reports(
+            include_hosts=arguments.hosts,
+            region=arguments.region,
+        )
     if actions == {"check-sudoers"} and not run_all_optional:
         reports = [("PASSWORDLESS SUDO", check_sudoers())]
         if arguments.nvme_config:
@@ -3590,7 +3603,12 @@ def run_selected_checks(
                 ("GLANCE IMAGE MOUNT", check_glance_mount(arguments.glance_mount_dir))
             )
         if "check-control-plane" in standalone:
-            reports.extend(control_plane_reports(include_hosts=arguments.hosts))
+            reports.extend(
+                control_plane_reports(
+                    include_hosts=arguments.hosts,
+                    region=arguments.region,
+                )
+            )
         if not run_all_optional:
             if arguments.nvme_config:
                 reports.append(("NVME CONFIGURATION", check_nvme_configuration()))
@@ -3646,6 +3664,11 @@ def main() -> int:
     parser = build_parser()
     arguments = parser.parse_args(normalize_legacy_arguments(sys.argv[1:]))
     arguments.actions = validate_actions(parser, arguments.actions)
+    if (
+        arguments.region is not None
+        and "check-control-plane" not in arguments.actions
+    ):
+        parser.error("--region requires the check-control-plane argument")
     if arguments.hosts and "check-control-plane" not in arguments.actions:
         parser.error("--hosts requires the check-control-plane argument")
     if arguments.hosts and arguments.run_all:

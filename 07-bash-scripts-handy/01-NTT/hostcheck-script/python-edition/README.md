@@ -18,7 +18,7 @@ Python edition of the local Platform9 host health-check utility.
 - A readable `/etc/os-release`; supported OS IDs are `ubuntu`, `rocky`, `rhel`, and `almalinux`
 - `dpkg-query` on Ubuntu or `rpm` on Rocky Linux, RHEL, and AlmaLinux
 - Host utilities used by individual checks, including `ip`, `timedatectl`, `systemctl`, `grpck`, `getent`, `iscsiadm`, `nvme`, `multipath`, `ovs-vsctl`, `virsh`, `readlink`, `stat`, and `curl`
-- The `check-control-plane` action requires a sourced OpenStack RC file with non-empty `OS_USERNAME`, `OS_PASSWORD`, and `OS_AUTH_URL` values, plus a working `openstack` CLI that can issue an authentication token
+- The `check-control-plane` action requires a sourced OpenStack RC file with non-empty `OS_USERNAME`, `OS_PASSWORD`, and `OS_AUTH_URL` values, plus a working `openstack` CLI that can issue an authentication token and validate an explicitly requested region
 - Root or equivalent read access is recommended because the checks inspect system, Platform9, libvirt, multipath, iSCSI, sudoers, account, `/etc/hosts`, and `/etc/fstab` data
 
 **What it does:**
@@ -33,7 +33,7 @@ Python edition of the local Platform9 host health-check utility.
 8. Validates the NVMe CLI, required runtime and persistent kernel modules, native multipath, host identity files, and the NVMe subsystems attached to running VMs.
 9. Checks the filesystems backing active PF9 Glance and Cinder services, including minimum capacity and persistent `/etc/fstab` entries for NFS mounts.
 10. Validates PF9 Nova, Cinder, and Glance override-file ownership and reports required Glance Cinder-store parameters without exposing configured secret values.
-11. Optionally queries Platform9 control-plane APIs for blueprint storage backends, hostconfig network labels, and matching Neutron provider networks. With `--hosts`, it also maps hosts to hostconfig profiles and clusters.
+11. Optionally queries Platform9 control-plane APIs for blueprint storage backends, hostconfig network labels, and matching Neutron provider networks grouped by unique network label. With `--hosts`, it also maps hosts to hostconfig profiles and clusters.
 
 ### Ubuntu setup
 
@@ -123,6 +123,12 @@ source <OPENSTACK_RC_FILE>
 # Include host-to-hostconfig-profile and host-to-cluster mappings
 ./hostinfo_check check-control-plane --hosts
 
+# Select and validate an explicit OpenStack region
+./hostinfo_check check-control-plane --region <REGION_NAME>
+
+# Select a region and include host mappings
+./hostinfo_check check-control-plane --hosts --region <REGION_NAME>
+
 # Inspect one VM by UUID
 ./hostinfo_check --uuid <VM_UUID>
 
@@ -161,7 +167,9 @@ sudo /opt/scripts/venv/bin/python /opt/scripts/./hostinfo_check
 
 ### `check-control-plane`
 
-The `check-control-plane` argument uses the OpenStack CLI to obtain an authentication token, then queries the Platform9 control-plane APIs. It reports blueprint storage backends, hostconfig network-label mappings, and Neutron provider networks. Add `--hosts` to include each host's hostconfig profile and cluster.
+The `check-control-plane` argument uses the OpenStack CLI to obtain an authentication token, then queries the Platform9 control-plane APIs. It reports blueprint storage backends, hostconfig network-label mappings, and Neutron provider networks. Provider networks are grouped by unique network label, with every matching network name and tenant ID listed under that label. The preceding hostconfig section retains the profile-to-label mappings. Add `--hosts` to include each host's hostconfig profile and cluster.
+
+Use `--region <REGION_NAME>` to override `OS_REGION_NAME` for the control-plane operation. The script validates an explicitly supplied value with `openstack region show <REGION_NAME>` and stops the report with a `FAIL` result when the region is invalid or unavailable. When `--region` is omitted, the current OpenStack environment is inherited unchanged. The option is valid only with `check-control-plane` and can be combined with `--hosts`.
 
 The OpenStack RC file must be sourced in the same shell that launches `hostinfo_check`. Running the RC file as a separate process does not retain its exported variables in the current shell.
 
@@ -234,6 +242,7 @@ If the script must be run from an approved root shell, source the OpenStack RC f
 | `check-glance-mount` | No | Runs the standalone Glance mount check. It accepts an optional positional directory or `--glance-mount-dir`. |
 | `check-control-plane` | No | Queries the Platform9 control plane and reports blueprint storage backends, hostconfig network-label mappings, and matching Neutron provider networks. Requires `OS_USERNAME`, `OS_PASSWORD`, and `OS_AUTH_URL` from a sourced OpenStack RC file. |
 | `--hosts` | No | Adds hostname, hostconfig-profile, and cluster mappings to `check-control-plane`. It requires that action and cannot be combined with `--run-all`, `--storage-check`, or `--resource-isolate-settings`. |
+| `--region <REGION_NAME>` | No | Overrides `OS_REGION_NAME` for `check-control-plane` and validates the region before collecting reports. When omitted, the existing environment is inherited. Requires `check-control-plane` and can be combined with `--hosts`. |
 | `--glance-mount-dir <DIRECTORY>` | No | Sets the Glance mount directory. The default is `/var/opt/imagelibrary`. |
 | `--uuid <VM_UUID>` | No | Runs the single-VM libvirt and multipath check when no standalone storage selector is present. |
 | `--virsh` | No | Hidden compatibility flag accepted by the parser. It does not alter check selection or report content. |
@@ -256,8 +265,9 @@ Standalone selectors take precedence over `--uuid` and the full suite. Multiple 
 - A completed report containing at least one `FAIL` or `ERROR` returns `1`.
 - Initialization, report-writing, and dependency errors return `2`.
 - `check-control-plane` exits with an initialization error when a required OpenStack environment variable is empty or missing. API, authentication, response-format, and unresolved hostconfig failures appear in the report and affect the normal report exit status.
+- An invalid or unavailable explicit `--region` produces a `CONTROL PLANE` failure before token issuance or report API requests. Omitting the option preserves the current OpenStack region environment.
 - `check-control-plane --hosts` writes API responses temporarily to `/tmp/host-list.json` and `/tmp/cluster-list.json` with mode `0600`, then removes files created by the process after rendering the report.
-- Control-plane terminal and PDF reports use dedicated columns for storage backends and host mappings. JSON checks additionally expose `backend_name`, `backend_sections`, `hostconfig_name`, and `cluster_name` fields.
+- Control-plane terminal and PDF reports use dedicated columns for storage backends and host mappings. Provider-network rows use the unique network label as the first column and list matching network names and tenant IDs without repeating labels shared by multiple profiles. JSON checks additionally expose `backend_name`, `backend_sections`, `hostconfig_name`, and `cluster_name` fields.
 - An unset LVM `filter` and `global_filter` is reported as `WARN`; a missing or unreadable `/etc/lvm/lvm.conf` remains `FAIL`.
 - A Glance mount permission mismatch from the expected mode `744` is reported as `WARN`.
 - A missing or non-`15` multipath `defaults.checker_timeout` value is reported as `WARN`.
@@ -284,7 +294,7 @@ Terminal and generated reports can expose infrastructure and account details. St
 - help section output:
 ```
 ./hostinfo_check -h
-usage: hostinfo_check.py [-h] [--hosts] [--uuid UUID] [--all-optional]
+usage: hostinfo_check.py [-h] [--hosts] [--region REGION] [--uuid UUID] [--all-optional]
                          [--run-all] [--resource-isolate-settings]
                          [--storage-check] [--nvme-config]
                          [--glance-mount-dir GLANCE_MOUNT_DIR]
@@ -302,6 +312,8 @@ options:
   -h, --help            show this help message and exit
   --hosts               include host, hostconfig profile, and cluster mappings;
                         requires check-control-plane (default: False)
+  --region REGION       OpenStack region for check-control-plane; defaults to
+                        OS_REGION_NAME (default: None)
   --uuid UUID           check one virsh VM and its multipath disks (default: None)
   --all-optional        run all optional checks, including resource-isolation
                         settings, except the passwordless sudo user listing;
@@ -625,59 +637,96 @@ PF9 PACKAGES
 │ pf9-ostackhost                 │    OK    │ installed                   │
 ╰────────────────────────────────┴──────────┴─────────────────────────────╯
 
-PF9 SERVICES                                                                       
-╭────────────────────────────────────────┬──────────┬─────────────────────────────╮
-│ Check                                  │  Status  │ Output                      │
-├────────────────────────────────────────┼──────────┼─────────────────────────────┤
-│ pf9-ostackhost.service                 │    OK    │ running                     │
-├────────────────────────────────────────┼──────────┼─────────────────────────────┤
-│ pf9-cindervolume-base.service          │    OK    │ running                     │
-├────────────────────────────────────────┼──────────┼─────────────────────────────┤
-│ pf9-glance-api.service                 │    OK    │ running                     │
-├────────────────────────────────────────┼──────────┼─────────────────────────────┤
-│ pf9-comms.service                      │    OK    │ running                     │
-├────────────────────────────────────────┼──────────┼─────────────────────────────┤
-│ pf9-ha-slave.service                   │    OK    │ running                     │
-├────────────────────────────────────────┼──────────┼─────────────────────────────┤
-│ pf9-hostagent.service                  │    OK    │ running                     │
-├────────────────────────────────────────┼──────────┼─────────────────────────────┤
-│ pf9-libvirt-exporter.service           │    OK    │ running                     │
-├────────────────────────────────────────┼──────────┼─────────────────────────────┤
-│ pf9-neutron-ovn-metadata-agent.service │    OK    │ running                     │
-├────────────────────────────────────────┼──────────┼─────────────────────────────┤
-│ pf9-node-exporter.service              │    OK    │ running                     │
-├────────────────────────────────────────┼──────────┼─────────────────────────────┤
-│ pf9-novncproxy.service                 │    OK    │ running                     │
-├────────────────────────────────────────┼──────────┼─────────────────────────────┤
-│ pf9-prometheus.service                 │    OK    │ running                     │
-├────────────────────────────────────────┼──────────┼─────────────────────────────┤
-│ pf9-remote-write.service               │    OK    │ running                     │
-├────────────────────────────────────────┼──────────┼─────────────────────────────┤
-│ pf9-sidekick.service                   │    OK    │ running                     │
-├────────────────────────────────────────┼──────────┼─────────────────────────────┤
-│ nova volume_use_multipath              │    OK    │ volume_use_multipath = true │
-├────────────────────────────────────────┼──────────┼─────────────────────────────┤
-│ nova_override.conf content             │   INFO   │                             │
-│                                        │          │ volume_use_multipath = true │
-├────────────────────────────────────────┼──────────┼─────────────────────────────┤
-│ Libvirt VM inventory                   │   INFO   │ XML only: none              │
-│                                        │          │ virsh only: none            │
-│                                        │          │ local XML configs: 3        │
-│                                        │          │ virsh domains: 3            │
-├────────────────────────────────────────┼──────────┼─────────────────────────────┤
-│ cinder_override.conf                   │   WARN   │ missing or unreadable       │
-╰────────────────────────────────────────┴──────────┴─────────────────────────────╯
+PF9 SERVICES                                                                                                                                                     
+╭────────────────────────────────────────┬──────────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Check                                  │  Status  │ Output                                                                                                    │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-ostackhost.service                 │    OK    │ running                                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-cindervolume-base.service          │    OK    │ running                                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-glance-api.service                 │    OK    │ running                                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-comms.service                      │    OK    │ running                                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-ha-slave.service                   │    OK    │ running                                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-hostagent.service                  │    OK    │ running                                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-libvirt-exporter.service           │    OK    │ running                                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-neutron-ovn-metadata-agent.service │    OK    │ running                                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-node-exporter.service              │    OK    │ running                                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-novncproxy.service                 │    OK    │ running                                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-prometheus.service                 │    OK    │ running                                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-remote-write.service               │    OK    │ running                                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-sidekick.service                   │    OK    │ running                                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ nova_override.conf                     │   INFO   │ no nova overrides found on the host                                                                       │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ nova_override.conf content             │   WARN   │ missing or unreadable                                                                                     │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ nova_override.conf ownership           │   INFO   │ missing or unreadable                                                                                     │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Libvirt VM inventory                   │   INFO   │ XML only: none                                                                                            │
+│                                        │          │ virsh only: none                                                                                          │
+│                                        │          │ local XML configs: 2                                                                                      │
+│                                        │          │ virsh domains: 2                                                                                          │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ cinder_override.conf content           │   INFO   │ file found with no content                                                                                │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ cinder_override.conf ownership         │   WARN   │ path=/opt/pf9/etc/pf9-cindervolume-base/conf.d/cinder_override.conf; ownership=root:root; mode=-rw-r--r-- │
+│                                        │          │ the owner and the group requires to be pf9:pf9group                                                       │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Glance Cinder store parameters         │   WARN   │ /etc/glance-api.conf is missing or unreadable                                                             │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ glance-api-override.conf content       │   INFO   │ no glance overrides found on the host                                                                     │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ glance-api-override.conf ownership     │   INFO   │ no glance overrides found on the host                                                                     │
+╰────────────────────────────────────────┴──────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
-OVS BRIDGES                                                                                                                                                                                          
-╭────────────────────┬──────────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Check              │  Status  │ Output                                                                                                                                                            │
-├────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ OVS bridge br-int  │   WARN   │ IP: none                                                                                                                                                          │
-│                    │          │ Ports: ovn-ad3e7a-0, patch-br-int-to-provnet-57216b63-846a-4ffa-aa99-7997a95dff84, tap2a95ee12-9d, tap36a2e0e8-cc, tap4c985d22-b0, tape395270c-00, tapf967d8cc-24 │
-├────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ OVS bridge br-phy1 │    OK    │ IP: 10.10.12.245/18                                                                                                                                               │
-│                    │          │ Ports: ens3                                                                                                                                                       │
-╰────────────────────┴──────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+PF9 SERVICE FILESYSTEMS                                                                                                                                                                             
+╭────────────────────────────────────────────────────────────────────┬──────────┬──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Check                                                              │  Status  │ Output                                                                                                           │
+├────────────────────────────────────────────────────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ /var/lib/nginx filesystem size                                     │    OK    │ ╭────────────┬───────────╮                                                                                       │
+│                                                                    │          │ │ Actual     │ Expected  │                                                                                       │
+│                                                                    │          │ ├────────────┼───────────┤                                                                                       │
+│                                                                    │          │ │ 144.26 GiB │ >= 50 GiB │                                                                                       │
+│                                                                    │          │ ╰────────────┴───────────╯                                                                                       │
+├────────────────────────────────────────────────────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ /var/lib/nginx filesystem backing                                  │   INFO   │ Local filesystem: source=/dev/sda1; target=/; type=ext4; options=rw,relatime,discard,errors=remount-ro,commit=30 │
+├────────────────────────────────────────────────────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ /opt/pf9/pf9-cindervolume-base/state/conversion filesystem size    │    OK    │ ╭────────────┬────────────╮                                                                                      │
+│                                                                    │          │ │ Actual     │ Expected   │                                                                                      │
+│                                                                    │          │ ├────────────┼────────────┤                                                                                      │
+│                                                                    │          │ │ 144.26 GiB │ >= 100 GiB │                                                                                      │
+│                                                                    │          │ ╰────────────┴────────────╯                                                                                      │
+├────────────────────────────────────────────────────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ /opt/pf9/pf9-cindervolume-base/state/conversion filesystem backing │   INFO   │ Local filesystem: source=/dev/sda1; target=/; type=ext4; options=rw,relatime,discard,errors=remount-ro,commit=30 │
+╰────────────────────────────────────────────────────────────────────┴──────────┴──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+OVS BRIDGES                                                                                                                      
+╭────────────────────┬──────────┬───────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Check              │  Status  │ Output                                                                                        │
+├────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────┤
+│ OVS bridge br-int  │   WARN   │ IP: none                                                                                      │
+│                    │          │ Ports: ovn-65f501-0, ovn-7aa66c-0, ovn-92143d-0, ovn-aa2a7a-0, tap8c4bd64c-27, tapdbaa944b-fa │
+├────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────┤
+│ OVS bridge br-phy1 │    OK    │ IP: 172.17.0.10/20                                                                            │
+│                    │          │ Ports: ens18                                                                                  │
+├────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────┤
+│ OVS bridge br-phy2 │   WARN   │ IP: none                                                                                      │
+│                    │          │ Ports: ens19                                                                                  │
+├────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────┤
+│ OVS bridge br-phy3 │    OK    │ IP: 172.17.11.1/24                                                                            │
+│                    │          │ Ports: vlan510                                                                                │
+╰────────────────────┴──────────┴───────────────────────────────────────────────────────────────────────────────────────────────╯
 
 /ETC/HOSTS ENTRIES                                                                                             
 ╭────────────┬──────────┬─────────────────────────────────────────────────────────────────────────────────────╮
@@ -936,14 +985,14 @@ FC PORTS
 ╰──────────┴────────┴──────────────────────────────────────────────────────╯
 ```
 
-- Sample output with `check-control-plane` and `--hosts` option:
+- Sample output with `check-control-plane` , `--hosts` and `--region` options:
 ```
-./hostinfo_check_v7 check-control-plane --hosts
+./hostinfo_check_v8 check-control-plane --hosts --region <region-name>
 hostInfo-check                            
 ╭──────────────┬─────────────────────────╮
 │ Host Name    │ Report Time             │
 ├──────────────┼─────────────────────────┤
-│ hl-u24-host1 │ 2026-11-12 14:26:37 UTC │
+│ hl-u24-host1 │ 2026-11-13 08:20:43 UTC │
 ╰──────────────┴─────────────────────────╯
 
 STORAGE BACKEND CONFIGURATION                             
@@ -968,26 +1017,16 @@ HOSTCONFIG NETWORK LABELS
 │                     │          │ vmnet -> enp7s19   │
 ╰─────────────────────┴──────────┴────────────────────╯
 
-PROVIDER NETWORKS                                                               
-╭─────────────────────┬──────────┬─────────────────────────────────────────────╮
-│ Hostconfig Profile  │  Status  │ Output                                      │
-├─────────────────────┼──────────┼─────────────────────────────────────────────┤
-│ pf9os-hl-profile-v1 │    OK    │ Network: hl-provider-510                    │
-│                     │          │ Tenant ID: 3243aebbb412467da80fdf6d44420eec │
-│                     │          │ Label: vmnet                                │
-├─────────────────────┼──────────┼─────────────────────────────────────────────┤
-│ u24-hl-config1      │    OK    │ Network: hl-provider-510-flt                │
-│                     │          │ Tenant ID: 3243aebbb412467da80fdf6d44420eec │
-│                     │          │ Label: migtest                              │
-│                     │          │                                             │
-│                     │          │ Network: hl-provider-510                    │
-│                     │          │ Tenant ID: 3243aebbb412467da80fdf6d44420eec │
-│                     │          │ Label: vmnet                                │
-├─────────────────────┼──────────┼─────────────────────────────────────────────┤
-│ u24-passth-cfg1     │    OK    │ Network: hl-provider-510                    │
-│                     │          │ Tenant ID: 3243aebbb412467da80fdf6d44420eec │
-│                     │          │ Label: vmnet                                │
-╰─────────────────────┴──────────┴─────────────────────────────────────────────╯
+PROVIDER NETWORKS
+╭───────────────┬──────────┬─────────────────────────────────────────────╮
+│ Network Label │  Status  │ Output                                      │
+├───────────────┼──────────┼─────────────────────────────────────────────┤
+│ vmnet         │    OK    │ Network: hl-provider-510                    │
+│               │          │ Tenant ID: 3243aebbb412467da80fdf6d44420eec │
+├───────────────┼──────────┼─────────────────────────────────────────────┤
+│ migtest       │    OK    │ Network: hl-provider-510-flt                │
+│               │          │ Tenant ID: 3243aebbb412467da80fdf6d44420eec │
+╰───────────────┴──────────┴─────────────────────────────────────────────╯
 
 HOSTS                                                      
 ╭──────────────┬─────────────────────┬────────────────────╮
