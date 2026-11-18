@@ -1931,7 +1931,7 @@ def override_content_result(
 
 
 def check_glance_cinder_store_parameters(path: Path) -> CheckResult:
-    """Report required Glance Cinder store parameters without exposing secrets."""
+    """Report the values and completeness of Glance Cinder store parameters."""
 
     required_parameters = (
         "cinder_api_insecure",
@@ -1952,17 +1952,36 @@ def check_glance_cinder_store_parameters(path: Path) -> CheckResult:
             f"{path} is missing or unreadable",
         )
 
-    configured = parse_key_value_config(content)
-    missing = [key for key in required_parameters if not configured.get(key)]
-    parameter_status = [
-        f"{key}: {'missing' if key in missing else 'configured'}"
-        for key in required_parameters
-    ]
+    # Local overrides are appended to glance-api.conf. Limit the check to the
+    # final 50 lines and ignore the commented defaults shipped by Glance.
+    trailing_lines = content.splitlines()[-50:]
+    uncommented_content = "\n".join(
+        line
+        for line in trailing_lines
+        if not line.lstrip().startswith(("#", ";"))
+    )
+    configured = parse_key_value_config(uncommented_content)
+    configured_parameters = {
+        key: configured[key] for key in required_parameters if configured.get(key)
+    }
+    if not configured_parameters:
+        return result(
+            "Glance Cinder store parameters",
+            "WARN",
+            "Glance not configured with cinder as backend",
+        )
+
+    missing = [key for key in required_parameters if key not in configured_parameters]
+    parameter_status = []
+    for key, value in configured_parameters.items():
+        # Reports are persisted to disk, so credentials must never be included.
+        displayed_value = "<redacted>" if key == "cinder_store_password" else value
+        parameter_status.append(f"{key}: {displayed_value}")
     if missing:
         parameter_status.append(f"Missing parameters: {', '.join(missing)}")
     return result(
         "Glance Cinder store parameters",
-        "WARN" if missing else "OK",
+        "FAIL" if missing else "OK",
         "\n".join(parameter_status),
     )
 
@@ -2035,7 +2054,7 @@ def check_pf9_services(operating_system: OperatingSystem) -> list[CheckResult]:
         "pf9-glance-role", operating_system
     ) and status_by_name.get("pf9-glance-api.service") == "OK":
         rows.append(
-            check_glance_cinder_store_parameters(Path("/etc/glance-api.conf"))
+            check_glance_cinder_store_parameters(Path("/etc/glance/glance-api.conf"))
         )
         glance_override_path = Path("/etc/glance/glance-api-override.conf")
         glance_override_content = read_text(glance_override_path)
