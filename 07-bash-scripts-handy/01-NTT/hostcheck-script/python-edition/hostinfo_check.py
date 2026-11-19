@@ -1657,37 +1657,20 @@ def check_multipath_blacklist() -> list[CheckResult]:
     device_blocks = []
     for section in devices_sections:
         device_blocks.extend(extract_braced_sections(section, "device"))
-    netapp_block = next(
-        (block for block in device_blocks if re.search(r'\bvendor\s+"?NETAPP"?', block)),
-        None,
+    vendors = list(
+        dict.fromkeys(
+            vendor
+            for block in device_blocks
+            if (vendor := parse_multipath_block_values(block).get("vendor"))
+        )
     )
-    if netapp_block is None:
-        rows.append(result("NETAPP multipath device", "WARN", "device block not found"))
-    else:
-        rows.append(result("NETAPP multipath device", "OK", "device block found"))
-        configured = parse_multipath_block_values(netapp_block)
-        expected = {
-            "path_grouping_policy": "group_by_prio",
-            "prio": "alua",
-            "failback": "immediate",
-            "fast_io_fail_tmo": "5",
-            "dev_loss_tmo": "30",
-            "product": "LUN.*",
-            "path_selector": "service-time 0",
-            "features": "0",
-            "hardware_handler": "1 alua",
-        }
-        for key, wanted in expected.items():
-            actual = configured.get(key)
-            status = "OK" if actual == wanted else ("WARN" if actual else "FAIL")
-            rows.append(
-                comparison_result(
-                    f"NETAPP {key}",
-                    status,
-                    actual,
-                    wanted,
-                )
-            )
+    rows.append(
+        result(
+            "Multipath config discovered",
+            "OK" if vendors else "WARN",
+            "\n".join(vendors) or "no general configs found",
+        )
+    )
     rows.append(result("multipath.conf content", "INFO", content))
     return rows
 
@@ -1757,7 +1740,12 @@ def check_rsyslog_pf9_rules() -> list[CheckResult]:
 
 
 def check_sysctl_settings() -> list[CheckResult]:
-    expected = {"net.ipv4.tcp_retries2": "7", "vm.swappiness": "10"}
+    expected = {
+        "net.ipv4.tcp_retries2": "7",
+        "vm.swappiness": "10",
+        "net.mptcp.enabled": "0",
+        "net.ipv4.tcp_migrate_req": "0",
+    }
     directory = Path("/etc/sysctl.d")
     files = list(directory.glob("*.conf")) if directory.is_dir() else []
     rows: list[CheckResult] = []
@@ -1850,11 +1838,16 @@ def check_pf9_packages(operating_system: OperatingSystem) -> list[CheckResult]:
     ]
     for package in packages:
         installed = package_is_installed(package, operating_system)
+        output = "installed" if installed else "not installed"
+        if package == "pf9-ha-slave" and not installed:
+            output = (
+                "not installed. Check if VMHA service is active on the PCD cluster"
+            )
         rows.append(
             result(
                 package,
                 "OK" if installed else "FAIL",
-                "installed" if installed else "not installed",
+                output,
             )
         )
     return rows
@@ -2002,7 +1995,16 @@ def check_pf9_services(operating_system: OperatingSystem) -> list[CheckResult]:
         "pf9-remote-write.service",
         "pf9-sidekick.service",
     ]
-    rows = [service_result(service) for service in services]
+    rows = []
+    for service in services:
+        service_status = service_result(service)
+        if service == "pf9-ha-slave.service" and service_status.status != "OK":
+            service_status = result(
+                service,
+                service_status.status,
+                "not running. Check if VMHA service is active on the PCD cluster",
+            )
+        rows.append(service_status)
     status_by_name = {row.name: row.status for row in rows}
     if package_is_installed(
         "pf9-ostackhost", operating_system
@@ -2307,7 +2309,7 @@ def check_vm_disk_multipath() -> list[CheckResult]:
                     identity,
                     status,
                     f"UUID: {uuid_text}; device: {device}; map: {map_name}; {state} "
-                    f"({len(active)}/{len(path_lines)} paths up)",
+                    f"({len(active)}/{len(path_lines)} paths up)\n{stanza}",
                 )
             )
     return rows
@@ -2391,9 +2393,16 @@ def check_vm_nvme_attachments() -> list[CheckResult]:
             rows.append(result(virtual_machine, "WARN", "no VM disks found"))
             continue
 
+        disk_details = []
         for target, source in disks:
             resolved_source = run_command(["readlink", "-f", source]).stdout or source
             device = resolve_nvme_namespace(source)
+            disk_details.append((target, source, resolved_source, device))
+
+        if not any(device is not None for _, _, _, device in disk_details):
+            continue
+
+        for target, source, resolved_source, device in disk_details:
             identity = f"{virtual_machine} ({uuid_text}) -> {target}"
             if device is None:
                 dm_match = re.search(r"/(dm-\d+)$", resolved_source)
