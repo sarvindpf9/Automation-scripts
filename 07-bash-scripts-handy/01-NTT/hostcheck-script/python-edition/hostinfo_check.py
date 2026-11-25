@@ -1507,7 +1507,12 @@ def check_fc_ports() -> list[CheckResult]:
         )
         return rows
 
-    targets_by_host = {host_name: 0 for host_name in online_hosts}
+    targets_by_host: dict[str, set[str]] = {
+        host_name: set() for host_name in online_hosts
+    }
+    target_groups_by_host: dict[str, dict[str, list[str]]] = {
+        host_name: {} for host_name in online_hosts
+    }
     remote_ports = sorted(Path("/sys/class/fc_remote_ports").glob("rport-*"))
     for remote_path in remote_ports:
         roles = (read_text(remote_path / "roles") or "").strip()
@@ -1515,7 +1520,7 @@ def check_fc_ports() -> list[CheckResult]:
             continue
 
         target_wwpn = (read_text(remote_path / "port_name") or "").strip()
-        host_match = re.fullmatch(r"rport-(\d+):\d+-\d+", remote_path.name)
+        host_match = re.fullmatch(r"rport-(\d+):(\d+)-(\d+)", remote_path.name)
         host_name = f"host{host_match.group(1)}" if host_match else "unknown"
         local_values = host_values.get(host_name)
         local_wwpn = local_values["WWPN"] if local_values else "<not reported>"
@@ -1545,16 +1550,50 @@ def check_fc_ports() -> list[CheckResult]:
             details = f"{details}; notes: {', '.join(relationship_notes)}"
         rows.append(result(remote_path.name, relationship_status, details))
 
-        if host_name in targets_by_host:
-            targets_by_host[host_name] += 1
+        if (
+            host_name in targets_by_host
+            and target_wwpn
+            and target_wwpn.casefold() != "unknown"
+        ):
+            targets_by_host[host_name].add(target_wwpn)
+            normalized_wwpn = target_wwpn.casefold().removeprefix("0x")
+            target_group = (
+                normalized_wwpn[-12:]
+                if re.fullmatch(r"[0-9a-f]{16}", normalized_wwpn)
+                else normalized_wwpn
+            )
+            host_target_groups = target_groups_by_host[host_name]
+            host_target_groups.setdefault(target_group, []).append(target_wwpn)
+
+    fabric_target_lines: list[str] = []
+    for host_name in sorted(target_groups_by_host):
+        fabric_name = host_values[host_name]["Fabric Name"]
+        if not fabric_name or fabric_name.casefold() == "unknown":
+            fabric_name = "<not reported>"
+        target_groups = target_groups_by_host[host_name]
+        if not target_groups:
+            fabric_target_lines.append(
+                f"{host_name} -> Fabric Name: {fabric_name} -> "
+                "Target WWPN: <none> (count: 0)"
+            )
+            continue
+        fabric_target_lines.extend(
+            f"{host_name} -> Fabric Name: {fabric_name} -> Target WWPN: "
+            f"{min(target_wwpns, key=str.casefold)} "
+            f"(count: {len(target_wwpns)})"
+            for _, target_wwpns in sorted(
+                target_groups.items(),
+                key=lambda item: min(item[1], key=str.casefold).casefold(),
+            )
+        )
 
     hosts_without_targets = sorted(
         host_name
         for host_name, visible_targets in targets_by_host.items()
-        if visible_targets == 0
+        if not visible_targets
     )
     per_host_counts = "; ".join(
-        f"{host_name}: {targets_by_host[host_name]} target(s)"
+        f"{host_name}: {len(targets_by_host[host_name])} target(s)"
         for host_name in sorted(targets_by_host)
     )
     if hosts_without_targets:
@@ -1577,6 +1616,13 @@ def check_fc_ports() -> list[CheckResult]:
                 f"ports; {per_host_counts}",
             )
         )
+    rows.append(
+        result(
+            "FCP targets by fabric",
+            "OK" if all(target_groups_by_host.values()) else "WARN",
+            "\n".join(fabric_target_lines),
+        )
+    )
     return rows
 
 
@@ -1675,14 +1721,71 @@ def check_multipath_blacklist() -> list[CheckResult]:
     return rows
 
 
+def extract_lvm_filter_assignments(content: str) -> list[str]:
+    """Extract single-line or multiline LVM filter assignments."""
+
+    assignments: list[str] = []
+    assignment_pattern = re.compile(r"(?m)^[ \t]*(?:global_)?filter[ \t]*=")
+
+    for match in assignment_pattern.finditer(content):
+        cursor = match.end()
+        while cursor < len(content) and content[cursor] in " \t":
+            cursor += 1
+
+        if cursor >= len(content) or content[cursor] != "[":
+            line_end = content.find("\n", cursor)
+            if line_end == -1:
+                line_end = len(content)
+            assignments.append(content[match.start():line_end].strip())
+            continue
+
+        bracket_depth = 0
+        quote: str | None = None
+        escaped = False
+        assignment_end: int | None = None
+
+        for index in range(cursor, len(content)):
+            character = content[index]
+
+            if quote is not None:
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == quote:
+                    quote = None
+                continue
+
+            if character in {"'", '"'}:
+                quote = character
+            elif character == "[":
+                bracket_depth += 1
+            elif character == "]":
+                bracket_depth -= 1
+                if bracket_depth == 0:
+                    assignment_end = index + 1
+                    break
+
+        if assignment_end is None:
+            line_end = content.find("\n", cursor)
+            if line_end == -1:
+                line_end = len(content)
+            assignments.append(content[match.start():line_end].strip())
+            continue
+
+        assignments.append(content[match.start():assignment_end].strip())
+
+    return assignments
+
+
 def check_lvm_filters() -> list[CheckResult]:
     content = read_text(Path("/etc/lvm/lvm.conf"))
     if content is None:
         return [result("LVM filters", "FAIL", "lvm.conf is missing or unreadable")]
-    matches = re.findall(r"^\s*(?:global_)?filter\s*=.*$", content, re.MULTILINE)
+    matches = extract_lvm_filter_assignments(content)
     if not matches:
         return [result("LVM filters", "WARN", "filter and global_filter are unset")]
-    return [result("LVM filters", "OK", "\n".join(line.strip() for line in matches))]
+    return [result("LVM filters", "OK", "\n".join(matches))]
 
 
 def check_hosts() -> list[CheckResult]:
@@ -2989,6 +3092,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="write a timestamped machine-parseable JSON report",
     )
+    parser.add_argument(
+        "--org",
+        metavar="NAME",
+        help="add an organisation name to PDF, JSON, or log output",
+    )
     return parser
 
 
@@ -3134,6 +3242,17 @@ def render_report_metadata(
     console.print()
 
 
+def render_organisation_metadata(console: Console, organisation_name: str) -> None:
+    """Render the user-provided organisation name above host metadata."""
+
+    table = Table(box=box.ROUNDED, show_header=False)
+    table.add_column(style="bold cyan")
+    table.add_column(style="bold")
+    table.add_row("company/organisation name", organisation_name)
+    console.print(table)
+    console.print()
+
+
 def pdf_paragraph_text(value: str) -> str:
     """Escape plain text and preserve its line breaks for ReportLab."""
 
@@ -3178,6 +3297,7 @@ def write_pdf_report(
     reports: Sequence[tuple[str, list[CheckResult]]],
     host_name: str,
     generated_at: dt.datetime,
+    organisation_name: str | None = None,
 ) -> None:
     """Write a paginated PDF that preserves the report's status colors."""
 
@@ -3188,6 +3308,7 @@ def write_pdf_report(
         from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
         from reportlab.lib.units import mm
         from reportlab.platypus import (
+            Image as PdfImage,
             LongTable,
             Paragraph,
             SimpleDocTemplate,
@@ -3202,6 +3323,18 @@ def write_pdf_report(
         ) from error
 
     destination.parent.mkdir(parents=True, exist_ok=True)
+    palette = {
+        "NAVY": colors.HexColor("#1F3B57"),
+        "ACCENT": colors.HexColor("#2E6DA4"),
+        "LIGHTBLUE": colors.HexColor("#DCE6F1"),
+        "GRAY": colors.HexColor("#595959"),
+        "LIGHTGRAY": colors.HexColor("#F2F2F2"),
+        "TEXT": colors.HexColor("#222222"),
+        "CODE_BG": colors.HexColor("#1E1E1E"),
+        "CODE_TEXT": colors.HexColor("#D4D4D4"),
+        "CODE_COMMENT": colors.HexColor("#6A9955"),
+        "BORDER": colors.HexColor("#AAAAAA"),
+    }
     page_size = landscape(A4)
     document = SimpleDocTemplate(
         str(destination),
@@ -3217,10 +3350,10 @@ def write_pdf_report(
     title_style = ParagraphStyle(
         "ReportTitle",
         parent=styles["Title"],
-        textColor=colors.HexColor("#0f172a"),
+        textColor=palette["NAVY"],
         fontSize=18,
         leading=22,
-        spaceAfter=5 * mm,
+        spaceAfter=0,
     )
     body_style = ParagraphStyle(
         "ReportBody",
@@ -3228,14 +3361,14 @@ def write_pdf_report(
         fontName="Courier",
         fontSize=7,
         leading=9,
-        textColor=colors.HexColor("#0f172a"),
+        textColor=palette["TEXT"],
         wordWrap="CJK",
     )
     check_style = ParagraphStyle(
         "CheckName",
         parent=body_style,
         fontName="Helvetica-Bold",
-        textColor=colors.HexColor("#0891b2"),
+        textColor=palette["NAVY"],
     )
     centered_style = ParagraphStyle(
         "Centered",
@@ -3247,15 +3380,15 @@ def write_pdf_report(
         "Header",
         parent=centered_style,
         fontSize=8,
-        textColor=colors.white,
+        textColor=palette["NAVY"],
     )
     status_colors = {
         "OK": colors.HexColor("#16a34a"),
         "FAIL": colors.HexColor("#dc2626"),
         "WARN": colors.HexColor("#d97706"),
-        "INFO": colors.HexColor("#0891b2"),
-        "non-nVMe": colors.HexColor("#0891b2"),
-        "non-multipath disk": colors.HexColor("#0891b2"),
+        "INFO": palette["ACCENT"],
+        "non-nVMe": palette["ACCENT"],
+        "non-multipath disk": palette["ACCENT"],
         "ERROR": colors.HexColor("#dc2626"),
     }
 
@@ -3265,14 +3398,14 @@ def write_pdf_report(
             ParagraphStyle(
                 f"Status{status or 'Blank'}",
                 parent=centered_style,
-                textColor=status_colors.get(status, colors.HexColor("#0f172a")),
+                textColor=status_colors.get(status, palette["TEXT"]),
             ),
         )
 
     def page_footer(canvas: object, doc: object) -> None:
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
-        canvas.setFillColor(colors.HexColor("#64748b"))
+        canvas.setFillColor(palette["GRAY"])
         canvas.drawString(12 * mm, 7 * mm, f"Host: {host_name}")
         canvas.drawRightString(
             page_size[0] - 12 * mm,
@@ -3297,8 +3430,8 @@ def write_pdf_report(
         colWidths=[available_width / 2, available_width / 2],
         style=TableStyle(
             [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#334155")),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#94a3b8")),
+                ("BACKGROUND", (0, 0), (-1, 0), palette["LIGHTBLUE"]),
+                ("GRID", (0, 0), (-1, -1), 0.5, palette["BORDER"]),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("LEFTPADDING", (0, 0), (-1, -1), 6),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 6),
@@ -3307,11 +3440,73 @@ def write_pdf_report(
             ]
         ),
     )
-    story = [
-        Paragraph("Host Information Check Report", title_style),
-        metadata_table,
-        Spacer(1, 5 * mm),
-    ]
+    logo_path = Path(__file__).resolve().with_name("logo.png")
+    logo: object = ""
+    if logo_path.is_file():
+        try:
+            logo_image = PdfImage(str(logo_path), lazy=0)
+            logo_scale = min(
+                (35 * mm) / logo_image.imageWidth,
+                (15 * mm) / logo_image.imageHeight,
+                1.0,
+            )
+            logo_image.drawWidth = logo_image.imageWidth * logo_scale
+            logo_image.drawHeight = logo_image.imageHeight * logo_scale
+            logo_image.hAlign = "RIGHT"
+            logo = logo_image
+        except OSError:
+            # An unreadable logo must not prevent the report from being created.
+            pass
+    header_table = PdfTable(
+        [[Paragraph("Host Information Check Report", title_style), logo]],
+        colWidths=[available_width * 0.80, available_width * 0.20],
+        style=TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+                ("LINEBELOW", (0, 0), (-1, -1), 1, palette["ACCENT"]),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3 * mm),
+            ]
+        ),
+    )
+    story = [header_table, Spacer(1, 5 * mm)]
+    if organisation_name is not None:
+        story.extend(
+            [
+                PdfTable(
+                    [
+                        [
+                            Paragraph("company/organisation name", check_style),
+                            Paragraph(
+                                pdf_paragraph_text(organisation_name), body_style
+                            ),
+                        ]
+                    ],
+                    colWidths=[available_width / 2, available_width / 2],
+                    style=TableStyle(
+                        [
+                            (
+                                "GRID",
+                                (0, 0),
+                                (-1, -1),
+                                0.5,
+                                palette["BORDER"],
+                            ),
+                            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                            ("TOPPADDING", (0, 0), (-1, -1), 5),
+                            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                        ]
+                    ),
+                ),
+                Spacer(1, 5 * mm),
+            ]
+        )
+    story.extend([metadata_table, Spacer(1, 5 * mm)])
 
     for section_title, rows in reports:
         story.append(
@@ -3320,8 +3515,8 @@ def write_pdf_report(
                 colWidths=[available_width],
                 style=TableStyle(
                     [
-                        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#0f172a")),
-                        ("BOX", (0, 0), (-1, -1), 0.75, colors.HexColor("#334155")),
+                        ("BACKGROUND", (0, 0), (-1, -1), palette["LIGHTBLUE"]),
+                        ("BOX", (0, 0), (-1, -1), 0.75, palette["BORDER"]),
                         ("LEFTPADDING", (0, 0), (-1, -1), 6),
                         ("RIGHTPADDING", (0, 0), (-1, -1), 6),
                         ("TOPPADDING", (0, 0), (-1, -1), 5),
@@ -3369,7 +3564,7 @@ def write_pdf_report(
             ]
         for row in rows:
             if row.expected is not None:
-                actual_color = status_colors.get(row.status, colors.HexColor("#0f172a"))
+                actual_color = status_colors.get(row.status, palette["TEXT"])
                 comparison = PdfTable(
                     [
                         [
@@ -3391,7 +3586,7 @@ def write_pdf_report(
                                 ParagraphStyle(
                                     f"Expected{len(table_data)}",
                                     parent=body_style,
-                                    textColor=colors.HexColor("#0891b2"),
+                                    textColor=palette["ACCENT"],
                                     fontName="Courier-Bold",
                                 ),
                             ),
@@ -3400,8 +3595,8 @@ def write_pdf_report(
                     colWidths=[column_widths[2] / 2 - 4, column_widths[2] / 2 - 4],
                     style=TableStyle(
                         [
-                            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#334155")),
-                            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#94a3b8")),
+                            ("BACKGROUND", (0, 0), (-1, 0), palette["LIGHTBLUE"]),
+                            ("GRID", (0, 0), (-1, -1), 0.5, palette["BORDER"]),
                             ("VALIGN", (0, 0), (-1, -1), "TOP"),
                             ("LEFTPADDING", (0, 0), (-1, -1), 4),
                             ("RIGHTPADDING", (0, 0), (-1, -1), 4),
@@ -3465,14 +3660,19 @@ def write_pdf_report(
                 )
 
         table_style = [
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#334155")),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#94a3b8")),
+            ("BACKGROUND", (0, 0), (-1, 0), palette["LIGHTBLUE"]),
+            ("GRID", (0, 0), (-1, -1), 0.5, palette["BORDER"]),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("LEFTPADDING", (0, 0), (-1, -1), 4),
             ("RIGHTPADDING", (0, 0), (-1, -1), 4),
             ("TOPPADDING", (0, 0), (-1, -1), 4),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+            (
+                "ROWBACKGROUNDS",
+                (0, 1),
+                (-1, -1),
+                [colors.white, palette["LIGHTGRAY"]],
+            ),
         ]
         story.append(
             LongTable(
@@ -3515,6 +3715,7 @@ def write_json_report(
     reports: Sequence[tuple[str, list[CheckResult]]],
     host_name: str,
     generated_at: dt.datetime,
+    organisation_name: str | None = None,
 ) -> None:
     """Write a stable, machine-parseable representation of all checks."""
 
@@ -3553,6 +3754,8 @@ def write_json_report(
             for section_name, rows in reports
         ],
     }
+    if organisation_name is not None:
+        payload["organisation_name"] = organisation_name
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
@@ -3703,6 +3906,12 @@ def main() -> int:
         parser.error("--hosts cannot be combined with --run-all")
     if arguments.hosts and arguments.storage_check and not arguments.run_all:
         parser.error("--hosts cannot be combined with --storage-check")
+    if arguments.org is not None and arguments.run_all:
+        parser.error("--org cannot be combined with --run-all")
+    if arguments.org is not None and not (
+        arguments.pdf or arguments.json or arguments.log
+    ):
+        parser.error("--org requires --pdf, --json, or --log")
     if (
         arguments.hosts
         and arguments.resource_isolate_settings
@@ -3749,6 +3958,8 @@ def main() -> int:
         )
         return 2
 
+    if arguments.org is not None and arguments.log:
+        render_organisation_metadata(console, arguments.org)
     if not sudoers_only:
         render_report_metadata(console, host_name, generated_at)
     for title, rows in reports:
@@ -3785,6 +3996,7 @@ def main() -> int:
                 reports,
                 host_name,
                 generated_at,
+                arguments.org,
             )
         except (OSError, RuntimeError) as error:
             console.print(
@@ -3802,6 +4014,7 @@ def main() -> int:
                 reports,
                 host_name,
                 generated_at,
+                arguments.org,
             )
         except OSError as error:
             console.print(

@@ -1,5 +1,7 @@
 setuptools
+cinder
+openstack-placement
+openstacksdk
 python-openstackclient
 requests
 reportlab
-rich

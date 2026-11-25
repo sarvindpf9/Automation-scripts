@@ -268,14 +268,14 @@ Standalone selectors take precedence over `--uuid` and the full suite. Multiple 
 - An invalid or unavailable explicit `--region` produces a `CONTROL PLANE` failure before token issuance or report API requests. Omitting the option preserves the current OpenStack region environment.
 - `check-control-plane --hosts` writes API responses temporarily to `/tmp/host-list.json` and `/tmp/cluster-list.json` with mode `0600`, then removes files created by the process after rendering the report.
 - Control-plane terminal and PDF reports use dedicated columns for storage backends and host mappings. Provider-network rows use the unique network label as the first column and list matching network names and tenant IDs without repeating labels shared by multiple profiles. JSON checks additionally expose `backend_name`, `backend_sections`, `hostconfig_name`, and `cluster_name` fields.
-- An unset LVM `filter` and `global_filter` is reported as `WARN`; a missing or unreadable `/etc/lvm/lvm.conf` remains `FAIL`.
+- Single-line and multiline LVM `filter` and `global_filter` assignments are reported in full. When both are unset, the check reports `WARN`; a missing or unreadable `/etc/lvm/lvm.conf` remains `FAIL`.
 - A Glance mount permission mismatch from the expected mode `744` is reported as `WARN`.
 - A missing or non-`15` multipath `defaults.checker_timeout` value is reported as `WARN`.
 - Missing PF9 rsyslog configuration or rules are reported as `WARN`.
 - `/etc/fstab` is included in the default report. An unreadable file is reported as `FAIL`.
 - The default suite conditionally includes resource-isolation sections based on `/proc/cmdline` and the loaded `vfio_pci` module. Skipped sections remain visible with an `INFO` result explaining why they were skipped.
 - `--all-optional` includes the complete resource-isolation report and the standalone NVMe VM-attachment report. Terminal, plain-text, PDF, and JSON outputs receive the same report collection, including skip messages and the process-column header in `Processes on isolated CPUs`.
-- The FC check inventories remote ports whose role contains `Target`, relates each `rport-*` to its local `hostN`, and reports each target WWPN. An online local FC port with no visible FCP targets is reported as `WARN` with zoning, zoneset, target-port, and fabric guidance.
+- The FC check inventories remote ports whose role contains `Target`, relates each `rport-*` to its local `hostN`, and reports each target WWPN. It counts unique target WWPNs per online host and adds an `FCP targets by fabric` result that groups target ports sharing the same normalized target identity under the local fabric name. An online local FC port with no visible FCP targets is reported as `WARN` with zoning, zoneset, target-port, and fabric guidance.
 - `NVME CONFIGURATION` checks `nvme-cli`, the `nvme_tcp`, `nvme_fabrics`, `nvme_keyring`, `nvme_core`, and `nvme_auth` runtime modules, persistent `nvme_tcp` and `nvme_fabrics` configuration, native NVMe multipath, `/etc/nvme/hostnqn`, and `/etc/nvme/hostid`.
 - `--storage-check` sends the same six storage sections to terminal, plain-text, PDF, and JSON output. A failing storage result still produces requested report files and returns `1`.
 - The default suite no longer runs `NVME CONFIGURATION` unless `--nvme-config` is supplied. `--storage-check` and `--run-all` continue to include it automatically.
@@ -339,93 +339,139 @@ options:
 
 - Print with all options set:
 ```
-./hostinfo_check.py --all-optional
+./hostinfo_check.py --run-all
 hostInfo-check                                                   
 ╭─────────────────────────────────────┬─────────────────────────╮
 │ Host Name                           │ Report Time             │
 ├─────────────────────────────────────┼─────────────────────────┤
-│ test-pf9-testbed-only-5305247-260-1 │ 2026-11-02 10:40:47 UTC │
+│ <HOSTNAME>                          │ 2026-11-02 10:40:47 UTC │
 ╰─────────────────────────────────────┴─────────────────────────╯
 
-ENVIRONMENT                                         
+ENVIRONMENT
 ╭──────────────────┬──────────┬────────────────────╮
 │ Check            │  Status  │ Output             │
 ├──────────────────┼──────────┼────────────────────┤
-│ Operating system │    OK    │ Ubuntu 24.04.4 LTS │
+│ Operating system │    OK    │ Ubuntu 24.04.5 LTS │
 ╰──────────────────┴──────────┴────────────────────╯
 
-MULTIPATH ORPHANS                                            
-╭───────────────────┬──────────┬────────────────────────────╮
-│ Check             │  Status  │ Output                     │
-├───────────────────┼──────────┼────────────────────────────┤
-│ Multipath orphans │   WARN   │ no multipath devices found │
-╰───────────────────┴──────────┴────────────────────────────╯
+MULTIPATH ORPHANS
+╭──────────────────────────────────────────┬──────────┬──────────────────────────────────────────────╮
+│ Check                                    │  Status  │ Output                                       │
+├──────────────────────────────────────────┼──────────┼──────────────────────────────────────────────┤
+│ <WWID> (<DM_DEVICE>)                     │   WARN   │ orphaned                                     │
+│                                          │          │ <WWID> <DM_DEVICE> ##,##                     │
+│                                          │          │ size=1.0G features='0' hwhandler='0' wp=rw   │
+╰──────────────────────────────────────────┴──────────┴──────────────────────────────────────────────╯
+
+VM DISK MULTIPATH
+╭───────────────────────────────────────────┬──────────────────────┬──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Check                                     │        Status        │ Output                                                                                                                                                               │
+├───────────────────────────────────────────┼──────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ <UUID>: <VM_DISK>                         │  non-multipath disk  │ UUID: <UUID>; source: <DEVICE_PATH>; resolved: <DEVICE_PATH>                                                                                                         │
+│                                           │                      │ VM appears to disk which are not managed by dm-multipath services                                                                                                    │
+├───────────────────────────────────────────┼──────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ <UUID>: <VM_DISK>                         │  non-multipath disk  │ UUID: <UUID>; source: volumes/volume-<UUID>; resolved:                                                                                                               │
+│                                           │                      │ volumes/volume-<UUID>                                                                                                                                                │
+│                                           │                      │ VM appears to disk which are not managed by dm-multipath services                                                                                                    │
+├───────────────────────────────────────────┼──────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ <UUID>: <VM_DISK>                         │  non-multipath disk  │ UUID: <UUID>; source:                                                                                                                                                │
+│                                           │                      │ /opt/pf9/data/state/mnt/<IDENTIFIER>/volume-<UUID>.<UUID>; resolved:                                                                                                 │
+│                                           │                      │ /opt/pf9/data/state/mnt/<IDENTIFIER>/volume-<UUID>.<UUID>                                                                                                            │
+│                                           │                      │ VM appears to disk which are not managed by dm-multipath services                                                                                                    │
+├───────────────────────────────────────────┼──────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ <UUID>: <VM_DISK>                         │  non-multipath disk  │ UUID: <UUID>; source: /opt/pf9/data/state/mnt/<IDENTIFIER>/volume-<UUID>; resolved:                                                                                  │
+│                                           │                      │ /opt/pf9/data/state/mnt/<IDENTIFIER>/volume-<UUID>                                                                                                                   │
+│                                           │                      │ VM appears to disk which are not managed by dm-multipath services                                                                                                    │
+╰───────────────────────────────────────────┴──────────────────────┴──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 VM NVME ATTACHMENTS                                                                                                                                                                                                                        
 ╭────────────────────────────────────────────────────────────────────────────────────┬──────────┬─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ VM UUID->root Disk                                                                 │  Status  │ Output                                                                                                                                  │
 ├────────────────────────────────────────────────────────────────────────────────────┼──────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ 41f4764c-7222-429e-89cc-0f6dbc8f10dc (41f4764c-7222-429e-89cc-0f6dbc8f10dc) -> vda │    OK    │ device: /dev/nvme0n1; hostnqn matches /etc/nvme/hostnqn                                                                                 │
-│                                                                                    │          │ nvme-subsys0 - NQN=nqn.1992-08.com.netapp:sn.81ff852fd14e11f18bf100a0b8ccb969:subsystem.openstack-a4e693dc-9aa2-4f78-a45e-8489742db373  │
-│                                                                                    │          │                hostnqn=nqn.2014-08.org.nvmexpress:uuid:cb4d001f-95e3-4682-809d-5754b220ae2b                                             │
+│ <UUID> (<UUID>) -> <VM_DISK>                                                       │    OK    │ device: <DEVICE_PATH>; hostnqn matches /etc/nvme/hostnqn                                                                                │
+│                                                                                    │          │ <NVME_SUBSYSTEM> - NQN=<NVME_SUBSYSTEM_NQN>                                                                                             │
+│                                                                                    │          │                hostnqn=<NVME_HOST_NQN>                                                                                                  │
 │                                                                                    │          │                iopolicy=round-robin                                                                                                     │
 │                                                                                    │          │ \                                                                                                                                       │
-│                                                                                    │          │  +- nvme0 tcp traddr=10.9.1.216,trsvcid=4420,src_addr=10.10.12.245 live optimized                                                       │
-│                                                                                    │          │  +- nvme1 tcp traddr=10.9.1.219,trsvcid=4420,src_addr=10.10.12.245 live optimized                                                       │
+│                                                                                    │          │  +- <NVME_CONTROLLER> tcp traddr=<IP_ADDRESS>,trsvcid=4420,src_addr=<IP_ADDRESS> live optimized                                         │
+│                                                                                    │          │  +- <NVME_CONTROLLER> tcp traddr=<IP_ADDRESS>,trsvcid=4420,src_addr=<IP_ADDRESS> live optimized                                         │
 ├────────────────────────────────────────────────────────────────────────────────────┼──────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ 04eb6ee9-04a3-4ee3-b14f-02f804ab306f (04eb6ee9-04a3-4ee3-b14f-02f804ab306f) -> vda │ non-nVMe │ source: volumes/volume-738ca215-7272-4907-b21a-3fada44456e4                                                                             │
-│                                                                                    │          │ resolved: volumes/volume-738ca215-7272-4907-b21a-3fada44456e4                                                                           │
+│ <UUID> (<UUID>) -> <VM_DISK>                                                       │ non-nVMe │ source: volumes/volume-<UUID>                                                                                                           │
+│                                                                                    │          │ resolved: volumes/volume-<UUID>                                                                                                         │
 ├────────────────────────────────────────────────────────────────────────────────────┼──────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ c13bffde-4cc3-4cc6-bd2d-57b1ea9762c8 (c13bffde-4cc3-4cc6-bd2d-57b1ea9762c8) -> vda │ non-nVMe │ source:                                                                                                                                 │
-│                                                                                    │          │ /opt/pf9/data/state/mnt/c5a57b9b94038b51a696b34cf6bb9a88/volume-6f4ed8f3-3f69-4d77-bb4d-db80614f5676.efce1fd6-1a04-46b3-832f-9d53560ae3 │
-│                                                                                    │          │ 5e                                                                                                                                      │
+│ <UUID> (<UUID>) -> <VM_DISK>                                                       │ non-nVMe │ source:                                                                                                                                 │
+│                                                                                    │          │ /opt/pf9/data/state/mnt/<MOUNT_ID>/<VOLUME_ID>                                                                                          │
 │                                                                                    │          │ resolved:                                                                                                                               │
-│                                                                                    │          │ /opt/pf9/data/state/mnt/c5a57b9b94038b51a696b34cf6bb9a88/volume-6f4ed8f3-3f69-4d77-bb4d-db80614f5676.efce1fd6-1a04-46b3-832f-9d53560ae3 │
-│                                                                                    │          │ 5e                                                                                                                                      │
+│                                                                                    │          │ /opt/pf9/data/state/mnt/<MOUNT_ID>/<VOLUME_ID>                                                                                          │
 ├────────────────────────────────────────────────────────────────────────────────────┼──────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ c13bffde-4cc3-4cc6-bd2d-57b1ea9762c8 (c13bffde-4cc3-4cc6-bd2d-57b1ea9762c8) -> vdb │ non-nVMe │ source: /opt/pf9/data/state/mnt/c5a57b9b94038b51a696b34cf6bb9a88/volume-53c13f47-1adb-4fd9-ba93-87cd82ddc2db                            │
-│                                                                                    │          │ resolved: /opt/pf9/data/state/mnt/c5a57b9b94038b51a696b34cf6bb9a88/volume-53c13f47-1adb-4fd9-ba93-87cd82ddc2db                          │
+│ <UUID> (<UUID>) -> <VM_DISK>                                                       │ non-nVMe │ source: /opt/pf9/data/state/mnt/<IDENTIFIER>/volume-<UUID>                                                                              │
+│                                                                                    │          │ resolved: /opt/pf9/data/state/mnt/<IDENTIFIER>/volume-<UUID>                                                                            │
 ╰────────────────────────────────────────────────────────────────────────────────────┴──────────┴─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
-VM DISK MULTIPATH                                                                                                                                                                                                                          
-╭───────────────────────────────────────────┬──────────────────────┬──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Check                                     │        Status        │ Output                                                                                                                                                               │
-├───────────────────────────────────────────┼──────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ 41f4764c-7222-429e-89cc-0f6dbc8f10dc: vda │  non-multipath disk  │ UUID: 41f4764c-7222-429e-89cc-0f6dbc8f10dc; source: /dev/nvme0n1; resolved: /dev/nvme0n1                                                                             │
-│                                           │                      │ VM appears to disk which are not managed by dm-multipath services                                                                                                    │
-├───────────────────────────────────────────┼──────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ 04eb6ee9-04a3-4ee3-b14f-02f804ab306f: vda │  non-multipath disk  │ UUID: 04eb6ee9-04a3-4ee3-b14f-02f804ab306f; source: volumes/volume-738ca215-7272-4907-b21a-3fada44456e4; resolved:                                                   │
-│                                           │                      │ volumes/volume-738ca215-7272-4907-b21a-3fada44456e4                                                                                                                  │
-│                                           │                      │ VM appears to disk which are not managed by dm-multipath services                                                                                                    │
-├───────────────────────────────────────────┼──────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ c13bffde-4cc3-4cc6-bd2d-57b1ea9762c8: vda │  non-multipath disk  │ UUID: c13bffde-4cc3-4cc6-bd2d-57b1ea9762c8; source:                                                                                                                  │
-│                                           │                      │ /opt/pf9/data/state/mnt/c5a57b9b94038b51a696b34cf6bb9a88/volume-6f4ed8f3-3f69-4d77-bb4d-db80614f5676.efce1fd6-1a04-46b3-832f-9d53560ae35e; resolved:                 │
-│                                           │                      │ /opt/pf9/data/state/mnt/c5a57b9b94038b51a696b34cf6bb9a88/volume-6f4ed8f3-3f69-4d77-bb4d-db80614f5676.efce1fd6-1a04-46b3-832f-9d53560ae35e                            │
-│                                           │                      │ VM appears to disk which are not managed by dm-multipath services                                                                                                    │
-├───────────────────────────────────────────┼──────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ c13bffde-4cc3-4cc6-bd2d-57b1ea9762c8: vdb │  non-multipath disk  │ UUID: c13bffde-4cc3-4cc6-bd2d-57b1ea9762c8; source: /opt/pf9/data/state/mnt/c5a57b9b94038b51a696b34cf6bb9a88/volume-53c13f47-1adb-4fd9-ba93-87cd82ddc2db; resolved:  │
-│                                           │                      │ /opt/pf9/data/state/mnt/c5a57b9b94038b51a696b34cf6bb9a88/volume-53c13f47-1adb-4fd9-ba93-87cd82ddc2db                                                                 │
-│                                           │                      │ VM appears to disk which are not managed by dm-multipath services                                                                                                    │
-╰───────────────────────────────────────────┴──────────────────────┴──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+GLANCE IMAGE MOUNT
+╭──────────────────────┬──────────┬───────────────────────────────────────────────────────────────╮
+│ Check                │  Status  │ Output                                                        │
+├──────────────────────┼──────────┼───────────────────────────────────────────────────────────────┤
+│ Glance mount mapping │   WARN   │ no /etc/fstab mapping found at or below /var/opt/imagelibrary │
+╰──────────────────────┴──────────┴───────────────────────────────────────────────────────────────╯
 
-GLANCE IMAGE MOUNT                                                    
-╭──────────────────────────┬──────────┬──────────────────────────────╮
-│ Check                    │  Status  │ Output                       │
-├──────────────────────────┼──────────┼──────────────────────────────┤
-│ Glance mount mapping     │    OK    │ /var/opt/imagelibrary/data   │
-├──────────────────────────┼──────────┼──────────────────────────────┤
-│ Glance mount permissions │   WARN   │ ╭────────┬──────────╮        │
-│                          │          │ │ Actual │ Expected │        │
-│                          │          │ ├────────┼──────────┤        │
-│                          │          │ │ 755    │ 744      │        │
-│                          │          │ ╰────────┴──────────╯        │
-├──────────────────────────┼──────────┼──────────────────────────────┤
-│ Glance mount ownership   │   FAIL   │ ╭───────────┬──────────────╮ │
-│                          │          │ │ Actual    │ Expected     │ │
-│                          │          │ ├───────────┼──────────────┤ │
-│                          │          │ │ root:root │ pf9:pf9group │ │
-│                          │          │ ╰───────────┴──────────────╯ │
-╰──────────────────────────┴──────────┴──────────────────────────────╯
+PASSWORDLESS SUDO
+╭───────────────────┬──────────┬─────────────────────────────────╮
+│ Check             │  Status  │ Output                          │
+├───────────────────┼──────────┼─────────────────────────────────┤
+│ Passwordless sudo │    OK    │ pf9 (/etc/sudoers.d/10-sudoers) │
+╰───────────────────┴──────────┴─────────────────────────────────╯
+
+CHECK BOND MODE
+╭───────┬──────────┬─────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Check │  Status  │ Output                                                                                      │
+├───────┼──────────┼─────────────────────────────────────────────────────────────────────────────────────────────┤
+│ bond0 │   INFO   │ mode: fault-tolerance (active-backup); slaves: <INTERFACE_NAME>, <INTERFACE_NAME>; IP: none │
+╰───────┴──────────┴─────────────────────────────────────────────────────────────────────────────────────────────╯
+
+NTP
+╭─────────────────────┬──────────┬────────╮
+│ Check               │  Status  │ Output │
+├─────────────────────┼──────────┼────────┤
+│ NTP synchronization │    OK    │ yes    │
+╰─────────────────────┴──────────┴────────╯
+
+SYSCTL SETTINGS
+╭─────────────────────────────────────┬──────────┬─────────────────────────────────────╮
+│ Check                               │  Status  │ Output                              │
+├─────────────────────────────────────┼──────────┼─────────────────────────────────────┤
+│ Runtime net.ipv4.tcp_retries2       │    OK    │ ╭────────┬──────────╮               │
+│                                     │          │ │ Actual │ Expected │               │
+│                                     │          │ ├────────┼──────────┤               │
+│                                     │          │ │ 7      │ 7        │               │
+│                                     │          │ ╰────────┴──────────╯               │
+├─────────────────────────────────────┼──────────┼─────────────────────────────────────┤
+│ Persistent net.ipv4.tcp_retries2    │    OK    │ /etc/sysctl.d/90-pf9-hostagent.conf │
+├─────────────────────────────────────┼──────────┼─────────────────────────────────────┤
+│ Runtime vm.swappiness               │    OK    │ ╭────────┬──────────╮               │
+│                                     │          │ │ Actual │ Expected │               │
+│                                     │          │ ├────────┼──────────┤               │
+│                                     │          │ │ 10     │ 10       │               │
+│                                     │          │ ╰────────┴──────────╯               │
+├─────────────────────────────────────┼──────────┼─────────────────────────────────────┤
+│ Persistent vm.swappiness            │    OK    │ /etc/sysctl.d/90-pf9-hostagent.conf │
+├─────────────────────────────────────┼──────────┼─────────────────────────────────────┤
+│ Runtime net.mptcp.enabled           │   WARN   │ ╭────────┬──────────╮               │
+│                                     │          │ │ Actual │ Expected │               │
+│                                     │          │ ├────────┼──────────┤               │
+│                                     │          │ │ 1      │ 0        │               │
+│                                     │          │ ╰────────┴──────────╯               │
+├─────────────────────────────────────┼──────────┼─────────────────────────────────────┤
+│ Persistent net.mptcp.enabled        │   FAIL   │ not found under /etc/sysctl.d       │
+├─────────────────────────────────────┼──────────┼─────────────────────────────────────┤
+│ Runtime net.ipv4.tcp_migrate_req    │    OK    │ ╭────────┬──────────╮               │
+│                                     │          │ │ Actual │ Expected │               │
+│                                     │          │ ├────────┼──────────┤               │
+│                                     │          │ │ 0      │ 0        │               │
+│                                     │          │ ╰────────┴──────────╯               │
+├─────────────────────────────────────┼──────────┼─────────────────────────────────────┤
+│ Persistent net.ipv4.tcp_migrate_req │   FAIL   │ not found under /etc/sysctl.d       │
+╰─────────────────────────────────────┴──────────┴─────────────────────────────────────╯
 
 PASSWORDLESS SUDO                                                             
 ╭───────────────────┬──────────┬─────────────────────────────────────────────╮
@@ -433,41 +479,6 @@ PASSWORDLESS SUDO
 ├───────────────────┼──────────┼─────────────────────────────────────────────┤
 │ Passwordless sudo │    OK    │ ubuntu (/etc/sudoers.d/90-cloud-init-users) │
 ╰───────────────────┴──────────┴─────────────────────────────────────────────╯
-
-CHECK BOND MODE                                          
-╭─────────────────┬──────────┬──────────────────────────╮
-│ Check           │  Status  │ Output                   │
-├─────────────────┼──────────┼──────────────────────────┤
-│ Bond interfaces │   WARN   │ no bond interfaces found │
-╰─────────────────┴──────────┴──────────────────────────╯
-
-NTP                                        
-╭─────────────────────┬──────────┬────────╮
-│ Check               │  Status  │ Output │
-├─────────────────────┼──────────┼────────┤
-│ NTP synchronization │    OK    │ yes    │
-╰─────────────────────┴──────────┴────────╯
-
-SYSCTL SETTINGS                                                                      
-╭──────────────────────────────────┬──────────┬─────────────────────────────────────╮
-│ Check                            │  Status  │ Output                              │
-├──────────────────────────────────┼──────────┼─────────────────────────────────────┤
-│ Runtime net.ipv4.tcp_retries2    │    OK    │ ╭────────┬──────────╮               │
-│                                  │          │ │ Actual │ Expected │               │
-│                                  │          │ ├────────┼──────────┤               │
-│                                  │          │ │ 7      │ 7        │               │
-│                                  │          │ ╰────────┴──────────╯               │
-├──────────────────────────────────┼──────────┼─────────────────────────────────────┤
-│ Persistent net.ipv4.tcp_retries2 │    OK    │ /etc/sysctl.d/90-pf9-hostagent.conf │
-├──────────────────────────────────┼──────────┼─────────────────────────────────────┤
-│ Runtime vm.swappiness            │   WARN   │ ╭────────┬──────────╮               │
-│                                  │          │ │ Actual │ Expected │               │
-│                                  │          │ ├────────┼──────────┤               │
-│                                  │          │ │ 60     │ 10       │               │
-│                                  │          │ ╰────────┴──────────╯               │
-├──────────────────────────────────┼──────────┼─────────────────────────────────────┤
-│ Persistent vm.swappiness         │   FAIL   │ not found under /etc/sysctl.d       │
-╰──────────────────────────────────┴──────────┴─────────────────────────────────────╯
 
 PACKAGES                                                          
 ╭─────────────────────────┬──────────┬───────────────────────────╮
@@ -517,28 +528,61 @@ NVME CONFIGURATION
 ├────────────────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────┤
 │ NVMe native multipath          │    OK    │ Y                                                                    │
 ├────────────────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────┤
-│ NVMe host NQN                  │    OK    │ nqn.2014-08.org.nvmexpress:uuid:cb4d001f-95e3-4682-809d-5754b220ae2b │
+│ NVMe host NQN                  │    OK    │ <NVME_NQN><UUID>                                                     │
 ├────────────────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────┤
-│ NVMe host ID                   │    OK    │ 56741e93-31b1-4bca-9033-9369cac22d0e                                 │
+│ NVMe host ID                   │    OK    │ <UUID>                                                               │
 ╰────────────────────────────────┴──────────┴──────────────────────────────────────────────────────────────────────╯
 
 ISCSI INITIATOR                                                            
 ╭──────────────────────┬──────────┬───────────────────────────────────────╮
 │ Check                │  Status  │ Output                                │
 ├──────────────────────┼──────────┼───────────────────────────────────────┤
-│ iSCSI initiator name │    OK    │ iqn.2004-10.com.ubuntu:01:b8747332a2c │
+│ iSCSI initiator name │    OK    │ <ISCSI_IQN>                           │
 ├──────────────────────┼──────────┼───────────────────────────────────────┤
 │ iscsid               │    OK    │ running                               │
 ├──────────────────────┼──────────┼───────────────────────────────────────┤
 │ iSCSI sessions       │   WARN   │ no active sessions                    │
 ╰──────────────────────┴──────────┴───────────────────────────────────────╯
 
-FC PORTS                                                                                  
-╭──────────┬──────────┬──────────────────────────────────────────────────────────────────╮
-│ Check    │  Status  │ Output                                                           │
-├──────────┼──────────┼──────────────────────────────────────────────────────────────────┤
-│ FC ports │   WARN   │ no FC ports found on this node (/sys/class/fc_host/host* absent) │
-╰──────────┴──────────┴──────────────────────────────────────────────────────────────────╯
+FC PORTS
+╭───────────────────────┬──────────┬──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Check                 │  Status  │ Output                                                                                                                           │
+├───────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ <FC_HOST>             │    OK    │ WWPN: <WWN>; WWNN: <WWN>; Port State: Online; Speed: 25 Gbit; Fabric Name: <WWN>                                                 │
+├───────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ <FC_HOST>             │    OK    │ WWPN: <WWN>; WWNN: <WWN>; Port State: Online; Speed: 25 Gbit; Fabric Name: <WWN>                                                 │
+├───────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ <REMOTE_PORT>         │    OK    │ Local Host: <FC_HOST>; Local WWPN: <WWN>; Local State: Online; Target WWPN: <WWN>; Remote Role: FCP Target                       │
+├───────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ <REMOTE_PORT>         │    OK    │ Local Host: <FC_HOST>; Local WWPN: <WWN>; Local State: Online; Target WWPN: <WWN>; Remote Role: FCP Target                       │
+├───────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ <REMOTE_PORT>         │    OK    │ Local Host: <FC_HOST>; Local WWPN: <WWN>; Local State: Online; Target WWPN: <WWN>; Remote Role: FCP Target                       │
+├───────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ <REMOTE_PORT>         │    OK    │ Local Host: <FC_HOST>; Local WWPN: <WWN>; Local State: Online; Target WWPN: <WWN>; Remote Role: FCP Target                       │
+├───────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ <REMOTE_PORT>         │    OK    │ Local Host: <FC_HOST>; Local WWPN: <WWN>; Local State: Online; Target WWPN: <WWN>; Remote Role: FCP Target                       │
+├───────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ <REMOTE_PORT>         │    OK    │ Local Host: <FC_HOST>; Local WWPN: <WWN>; Local State: Online; Target WWPN: <WWN>; Remote Role: FCP Target                       │
+├───────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ <REMOTE_PORT>         │    OK    │ Local Host: <FC_HOST>; Local WWPN: <WWN>; Local State: Online; Target WWPN: <WWN>; Remote Role: FCP Target                       │
+├───────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ <REMOTE_PORT>         │    OK    │ Local Host: <FC_HOST>; Local WWPN: <WWN>; Local State: Online; Target WWPN: <WWN>; Remote Role: FCP Target                       │
+├───────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ <REMOTE_PORT>         │    OK    │ Local Host: <FC_HOST>; Local WWPN: <WWN>; Local State: Online; Target WWPN: <WWN>; Remote Role: FCP Target                       │
+├───────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ <REMOTE_PORT>         │    OK    │ Local Host: <FC_HOST>; Local WWPN: <WWN>; Local State: Online; Target WWPN: <WWN>; Remote Role: FCP Target                       │
+├───────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ <REMOTE_PORT>         │    OK    │ Local Host: <FC_HOST>; Local WWPN: <WWN>; Local State: Online; Target WWPN: <WWN>; Remote Role: FCP Target                       │
+├───────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ <REMOTE_PORT>         │    OK    │ Local Host: <FC_HOST>; Local WWPN: <WWN>; Local State: Online; Target WWPN: <WWN>; Remote Role: FCP Target                       │
+├───────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ FCP targets           │    OK    │ FCP target visibility confirmed for all online local FC ports; <FC_HOST>: 6 target(s); <FC_HOST>: 6 target(s)                    │
+├───────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ FCP targets by fabric │    OK    │ <FC_HOST> -> Fabric Name: <WWN> -> Target WWPN: <WWN> (count: 4)                                                                 │
+│                       │          │ <FC_HOST> -> Fabric Name: <WWN> -> Target WWPN: <WWN> (count: 2)                                                                 │
+│                       │          │ <FC_HOST> -> Fabric Name: <WWN> -> Target WWPN: <WWN> (count: 4)                                                                 │
+│                       │          │ <FC_HOST> -> Fabric Name: <WWN> -> Target WWPN: <WWN> (count: 2)                                                                 │
+╰───────────────────────┴──────────┴──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 ISCSID CONF                                                                   
 ╭─────────────────────────────────────────┬──────────┬───────────────────────╮
@@ -575,32 +619,56 @@ ISCSID CONF
 │                                         │          │ ╰────────┴──────────╯ │
 ╰─────────────────────────────────────────┴──────────┴───────────────────────╯
 
-MULTIPATH BLACKLIST                                                 
-╭──────────────────────────┬──────────┬────────────────────────────╮
-│ Check                    │  Status  │ Output                     │
-├──────────────────────────┼──────────┼────────────────────────────┤
-│ defaults.checker_timeout │   WARN   │ ╭────────┬──────────╮      │
-│                          │          │ │ Actual │ Expected │      │
-│                          │          │ ├────────┼──────────┤      │
-│                          │          │ │ unset  │ 15       │      │
-│                          │          │ ╰────────┴──────────╯      │
-├──────────────────────────┼──────────┼────────────────────────────┤
-│ Multipath blacklist      │   WARN   │ no wwid/devnode entries    │
-├──────────────────────────┼──────────┼────────────────────────────┤
-│ NETAPP multipath device  │   WARN   │ device block not found     │
-├──────────────────────────┼──────────┼────────────────────────────┤
-│ multipath.conf content   │   INFO   │ defaults {                 │
-│                          │          │     user_friendly_names no │
-│                          │          │     find_multipaths yes    │
-│                          │          │ }                          │
-╰──────────────────────────┴──────────┴────────────────────────────╯
+MULTIPATH BLACKLIST
+╭─────────────────────────────┬──────────┬──────────────────────────────────────────────╮
+│ Check                       │  Status  │ Output                                       │
+├─────────────────────────────┼──────────┼──────────────────────────────────────────────┤
+│ defaults.checker_timeout    │   WARN   │ ╭────────┬──────────╮                        │
+│                             │          │ │ Actual │ Expected │                        │
+│                             │          │ ├────────┼──────────┤                        │
+│                             │          │ │ unset  │ 15       │                        │
+│                             │          │ ╰────────┴──────────╯                        │
+├─────────────────────────────┼──────────┼──────────────────────────────────────────────┤
+│ Multipath blacklist         │    OK    │ wwid <WWID>                                  │
+├─────────────────────────────┼──────────┼──────────────────────────────────────────────┤
+│ Multipath config discovered │    OK    │ 3PARdata                                     │
+├─────────────────────────────┼──────────┼──────────────────────────────────────────────┤
+│ multipath.conf content      │   INFO   │ defaults {                                   │
+│                             │          │ user_friendly_names no                       │
+│                             │          │ find_multipaths yes                          │
+│                             │          │ polling_interval 5                           │
+│                             │          │ }                                            │
+│                             │          │                                              │
+│                             │          │ blacklist {                                  │
+│                             │          │    wwid <WWID>                               │
+│                             │          │ }                                            │
+│                             │          │                                              │
+│                             │          │ devices {                                    │
+│                             │          │     device {                                 │
+│                             │          │         vendor               "3PARdata"      │
+│                             │          │         product              "VV"            │
+│                             │          │         hardware_handler     "1 alua"        │
+│                             │          │         path_selector        "round-robin 0" │
+│                             │          │         path_checker         "tur"           │
+│                             │          │         uid_attribute        "ID_SERIAL"     │
+│                             │          │         prio                 "alua"          │
+│                             │          │         failback             immediate       │
+│                             │          │         path_grouping_policy "group_by_prio" │
+│                             │          │         no_path_retry        18              │
+│                             │          │         rr_min_io            100             │
+│                             │          │         rr_weight            "uniform"       │
+│                             │          │         features             "0"             │
+│                             │          │     }                                        │
+│                             │          │ }                                            │
+╰─────────────────────────────┴──────────┴──────────────────────────────────────────────╯
 
-LVM FILTERS                                                    
-╭─────────────┬──────────┬────────────────────────────────────╮
-│ Check       │  Status  │ Output                             │
-├─────────────┼──────────┼────────────────────────────────────┤
-│ LVM filters │   WARN   │ filter and global_filter are unset │
-╰─────────────┴──────────┴────────────────────────────────────╯
+LVM FILTERS
+╭─────────────┬──────────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Check       │  Status  │ Output                                                                                                                                    │
+├─────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ LVM filters │    OK    │ filter = [ "a|^/dev/nvme[0-9]+n[0-9]+p[0-9]|", "a|^/dev/md[0-9]+$|", "a|^/dev/md[0-9]+p[0-9]+$|", "a|^/dev/sda+[0-9]*$|", "r|.*|" ]       │
+│             │          │ global_filter = [ "a|^/dev/nvme[0-9]+n[0-9]+p[0-9]|", "a|^/dev/md[0-9]+$|", "a|^/dev/md[0-9]+p[0-9]+$|", "a|^/dev/sda[0-9]*$|", "r|.*|" ] │
+╰─────────────┴──────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 PF9 PACKAGES                                                               
 ╭────────────────────────────────┬──────────┬─────────────────────────────╮
@@ -637,96 +705,112 @@ PF9 PACKAGES
 │ pf9-ostackhost                 │    OK    │ installed                   │
 ╰────────────────────────────────┴──────────┴─────────────────────────────╯
 
-PF9 SERVICES                                                                                                                                                     
-╭────────────────────────────────────────┬──────────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Check                                  │  Status  │ Output                                                                                                    │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ pf9-ostackhost.service                 │    OK    │ running                                                                                                   │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ pf9-cindervolume-base.service          │    OK    │ running                                                                                                   │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ pf9-glance-api.service                 │    OK    │ running                                                                                                   │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ pf9-comms.service                      │    OK    │ running                                                                                                   │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ pf9-ha-slave.service                   │    OK    │ running                                                                                                   │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ pf9-hostagent.service                  │    OK    │ running                                                                                                   │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ pf9-libvirt-exporter.service           │    OK    │ running                                                                                                   │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ pf9-neutron-ovn-metadata-agent.service │    OK    │ running                                                                                                   │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ pf9-node-exporter.service              │    OK    │ running                                                                                                   │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ pf9-novncproxy.service                 │    OK    │ running                                                                                                   │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ pf9-prometheus.service                 │    OK    │ running                                                                                                   │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ pf9-remote-write.service               │    OK    │ running                                                                                                   │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ pf9-sidekick.service                   │    OK    │ running                                                                                                   │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ nova_override.conf                     │   INFO   │ no nova overrides found on the host                                                                       │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ nova_override.conf content             │   WARN   │ missing or unreadable                                                                                     │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ nova_override.conf ownership           │   INFO   │ missing or unreadable                                                                                     │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ Libvirt VM inventory                   │   INFO   │ XML only: none                                                                                            │
-│                                        │          │ virsh only: none                                                                                          │
-│                                        │          │ local XML configs: 2                                                                                      │
-│                                        │          │ virsh domains: 2                                                                                          │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ cinder_override.conf content           │   INFO   │ file found with no content                                                                                │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ cinder_override.conf ownership         │   WARN   │ path=/opt/pf9/etc/pf9-cindervolume-base/conf.d/cinder_override.conf; ownership=root:root; mode=-rw-r--r-- │
-│                                        │          │ the owner and the group requires to be pf9:pf9group                                                       │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ Glance Cinder store parameters         │   WARN   │ /etc/glance-api.conf is missing or unreadable                                                             │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ glance-api-override.conf content       │   INFO   │ no glance overrides found on the host                                                                     │
-├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ glance-api-override.conf ownership     │   INFO   │ no glance overrides found on the host                                                                     │
-╰────────────────────────────────────────┴──────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+PF9 SERVICES
+╭────────────────────────────────────────┬──────────┬───────────────────────────────────────────────────────────────────────────────────────────╮
+│ Check                                  │  Status  │ Output                                                                                    │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-ostackhost.service                 │    OK    │ running                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-cindervolume-base.service          │    OK    │ running                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-glance-api.service                 │    OK    │ running                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-comms.service                      │    OK    │ running                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-ha-slave.service                   │    OK    │ running                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-hostagent.service                  │    OK    │ running                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-libvirt-exporter.service           │    OK    │ running                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-neutron-ovn-metadata-agent.service │    OK    │ running                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-node-exporter.service              │    OK    │ running                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-novncproxy.service                 │    OK    │ running                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-prometheus.service                 │    OK    │ running                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-remote-write.service               │    OK    │ running                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ pf9-sidekick.service                   │    OK    │ running                                                                                   │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ nova volume_use_multipath              │    OK    │ volume_use_multipath = True                                                               │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ nova_override.conf content             │   INFO   │                                                                                           │
+│                                        │          │ volume_use_multipath = True                                                               │
+│                                        │          │ cpu_models = Cascadelake-Server-noTSX                                                     │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ nova_override.conf ownership           │    OK    │ path=/opt/pf9/etc/nova/conf.d/nova_override.conf; ownership=pf9:pf9group; mode=-rw-rw-r-- │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ Libvirt VM inventory                   │   INFO   │ XML only: none                                                                            │
+│                                        │          │ virsh only: none                                                                          │
+│                                        │          │ local XML configs: 1                                                                      │
+│                                        │          │ virsh domains: 1                                                                          │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ cinder_override.conf content           │   WARN   │ missing or unreadable                                                                     │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ cinder_override.conf ownership         │   INFO   │ missing or unreadable                                                                     │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ Glance Cinder store parameters         │    OK    │ cinder_api_insecure: true                                                                 │
+│                                        │          │ cinder_os_region_name: wallab                                                             │
+│                                        │          │ cinder_store_auth_address: http://localhost:8158/keystone/v3                              │
+│                                        │          │ cinder_store_password: <redacted>                                                         │
+│                                        │          │ cinder_store_project_domain_name: Default                                                 │
+│                                        │          │ cinder_store_project_name: services                                                       │
+│                                        │          │ cinder_store_user_domain_name: Default                                                    │
+│                                        │          │ cinder_store_user_name: cinder                                                            │
+│                                        │          │ cinder_volume_type: wl5-alletra-glance-be01                                               │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ glance-api-override.conf content       │   INFO   │                                                                                           │
+│                                        │          │ cinder_use_multipath = True                                                               │
+│                                        │          │                                                                                           │
+│                                        │          │ #                                                                                         │
+│                                        │          │ #enabled_backends = wl5-alletra-glance-be01:cinder, wl5-3par-cinder-be01:cinder           │
+│                                        │          │                                                                                           │
+│                                        │          │ #                                                                                         │
+│                                        │          │ #cinder_volume_type = wl5-3par-cinder-be01                                                │
+├────────────────────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ glance-api-override.conf ownership     │    OK    │ path=/etc/glance/glance-api-override.conf; ownership=pf9:pf9group; mode=-rw-r--r--        │
+╰────────────────────────────────────────┴──────────┴───────────────────────────────────────────────────────────────────────────────────────────╯
 
 PF9 SERVICE FILESYSTEMS                                                                                                                                                                             
-╭────────────────────────────────────────────────────────────────────┬──────────┬──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Check                                                              │  Status  │ Output                                                                                                           │
-├────────────────────────────────────────────────────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ /var/lib/nginx filesystem size                                     │    OK    │ ╭────────────┬───────────╮                                                                                       │
+╭────────────────────────────────────────────────────────────────────┬──────────┬──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Check                                                              │  Status  │ Output                                                                                                               │
+├────────────────────────────────────────────────────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ /var/lib/nginx filesystem size                                     │    OK    │ ╭────────────┬───────────╮                                                                                           │
 │                                                                    │          │ │ Actual     │ Expected  │                                                                                       │
-│                                                                    │          │ ├────────────┼───────────┤                                                                                       │
+│                                                                    │          │ ├────────────┼───────────┤                                                                                           │
 │                                                                    │          │ │ 144.26 GiB │ >= 50 GiB │                                                                                       │
-│                                                                    │          │ ╰────────────┴───────────╯                                                                                       │
-├────────────────────────────────────────────────────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ /var/lib/nginx filesystem backing                                  │   INFO   │ Local filesystem: source=/dev/sda1; target=/; type=ext4; options=rw,relatime,discard,errors=remount-ro,commit=30 │
-├────────────────────────────────────────────────────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ /opt/pf9/pf9-cindervolume-base/state/conversion filesystem size    │    OK    │ ╭────────────┬────────────╮                                                                                      │
+│                                                                    │          │ ╰────────────┴───────────╯                                                                                           │
+├────────────────────────────────────────────────────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ /var/lib/nginx filesystem backing                                  │   INFO   │ Local filesystem: source=<DEVICE_PATH>; target=/; type=ext4; options=rw,relatime,discard,errors=remount-ro,commit=30 │
+├────────────────────────────────────────────────────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ /opt/pf9/pf9-cindervolume-base/state/conversion filesystem size    │    OK    │ ╭────────────┬────────────╮                                                                                          │
 │                                                                    │          │ │ Actual     │ Expected   │                                                                                      │
-│                                                                    │          │ ├────────────┼────────────┤                                                                                      │
+│                                                                    │          │ ├────────────┼────────────┤                                                                                          │
 │                                                                    │          │ │ 144.26 GiB │ >= 100 GiB │                                                                                      │
-│                                                                    │          │ ╰────────────┴────────────╯                                                                                      │
-├────────────────────────────────────────────────────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ /opt/pf9/pf9-cindervolume-base/state/conversion filesystem backing │   INFO   │ Local filesystem: source=/dev/sda1; target=/; type=ext4; options=rw,relatime,discard,errors=remount-ro,commit=30 │
-╰────────────────────────────────────────────────────────────────────┴──────────┴──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+│                                                                    │          │ ╰────────────┴────────────╯                                                                                          │
+├────────────────────────────────────────────────────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ /opt/pf9/pf9-cindervolume-base/state/conversion filesystem backing │   INFO   │ Local filesystem: source=<DEVICE_PATH>; target=/; type=ext4; options=rw,relatime,discard,errors=remount-ro,commit=30 │
+╰────────────────────────────────────────────────────────────────────┴──────────┴──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 OVS BRIDGES                                                                                                                      
-╭────────────────────┬──────────┬───────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Check              │  Status  │ Output                                                                                        │
-├────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────┤
-│ OVS bridge br-int  │   WARN   │ IP: none                                                                                      │
-│                    │          │ Ports: ovn-65f501-0, ovn-7aa66c-0, ovn-92143d-0, ovn-aa2a7a-0, tap8c4bd64c-27, tapdbaa944b-fa │
-├────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────┤
-│ OVS bridge br-phy1 │    OK    │ IP: 172.17.0.10/20                                                                            │
-│                    │          │ Ports: ens18                                                                                  │
-├────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────┤
-│ OVS bridge br-phy2 │   WARN   │ IP: none                                                                                      │
-│                    │          │ Ports: ens19                                                                                  │
-├────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────┤
-│ OVS bridge br-phy3 │    OK    │ IP: 172.17.11.1/24                                                                            │
-│                    │          │ Ports: vlan510                                                                                │
-╰────────────────────┴──────────┴───────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─────────────────────────┬──────────┬───────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Check                   │  Status  │ Output                                                                                        │
+├─────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────┤
+│ OVS bridge <OVS_BRIDGE> │   WARN   │ IP: none                                                                                      │
+│                         │          │ Ports: <OVN_PORTS>, <TAP_INTERFACES>                                                          │
+├─────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────┤
+│ OVS bridge <OVS_BRIDGE> │    OK    │ IP: <IP_ADDRESS>                                                                              │
+│                         │          │ Ports: <INTERFACE_NAME>                                                                       │
+├─────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────┤
+│ OVS bridge <OVS_BRIDGE> │   WARN   │ IP: none                                                                                      │
+│                         │          │ Ports: <INTERFACE_NAME>                                                                       │
+├─────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────┤
+│ OVS bridge <OVS_BRIDGE> │    OK    │ IP: <IP_ADDRESS>                                                                              │
+│                         │          │ Ports: <VLAN_INTERFACE>                                                                       │
+╰─────────────────────────┴──────────┴───────────────────────────────────────────────────────────────────────────────────────────────╯
 
 /ETC/HOSTS ENTRIES                                                                                             
 ╭────────────┬──────────┬─────────────────────────────────────────────────────────────────────────────────────╮
@@ -734,35 +818,30 @@ OVS BRIDGES
 ├────────────┼──────────┼─────────────────────────────────────────────────────────────────────────────────────┤
 │ /etc/hosts │   INFO   │ Review required host mappings, including storage SVM IP/FQDN records.               │
 │            │          │                                                                                     │
-│            │          │ 127.0.1.1   test-pf9-testbed-only-5305247-260-1 test-pf9-testbed-only-5305247-260-1 │
-│            │          │ 127.0.0.1 localhost                                                                 │
+│            │          │ <IP_ADDRESS>   <HOSTNAME> <HOSTNAME>                                                │
+│            │          │ <IP_ADDRESS> <HOSTNAME>                                                             │
 │            │          │                                                                                     │
 │            │          │ # The following lines are desirable for IPv6 capable hosts                          │
-│            │          │ ::1 ip6-localhost ip6-loopback                                                      │
-│            │          │ fe00::0 ip6-localnet                                                                │
-│            │          │ ff00::0 ip6-mcastprefix                                                             │
-│            │          │ ff02::1 ip6-allnodes                                                                │
-│            │          │ ff02::2 ip6-allrouters                                                              │
-│            │          │ ff02::3 ip6-allhosts                                                                │
-│            │          │ 127.0.0.1 placement-api.test-du-testbed-only-5305247-syd.svc.cluster.local          │
-│            │          │ 127.0.0.1 glance-api.test-du-testbed-only-5305247-syd.svc.cluster.local             │
-│            │          │ 127.0.0.1 neutron-server.test-du-testbed-only-5305247-syd.svc.cluster.local         │
-│            │          │ 127.0.0.1 nova-api.test-du-testbed-only-5305247-syd.svc.cluster.local               │
-│            │          │ 127.0.0.1 barbican-api.test-du-testbed-only-5305247-syd.svc.cluster.local           │
-│            │          │ 127.0.0.1 cinder-api.test-du-testbed-only-5305247-syd.svc.cluster.local             │
-│            │          │ 10.9.1.208 PF9-SELECT                                                               │
+│            │          │ <IPV6_ADDRESS> <IPV6_HOST_ALIASES>                                                  │
+│            │          │ <IP_ADDRESS> <SERVICE_FQDN>                                                         │
+│            │          │ <IP_ADDRESS> <SERVICE_FQDN>                                                         │
+│            │          │ <IP_ADDRESS> <SERVICE_FQDN>                                                         │
+│            │          │ <IP_ADDRESS> <SERVICE_FQDN>                                                         │
+│            │          │ <IP_ADDRESS> <SERVICE_FQDN>                                                         │
+│            │          │ <IP_ADDRESS> <SERVICE_FQDN>                                                         │
+│            │          │ <IP_ADDRESS> <HOSTNAME>                                                             │
 ╰────────────┴──────────┴─────────────────────────────────────────────────────────────────────────────────────╯
 
 /ETC/FSTAB ENTRIES                                                                                                                            
-╭────────────┬──────────┬────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Check      │  Status  │ Output                                                                                                             │
-├────────────┼──────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ /etc/fstab │    OK    │ LABEL=cloudimg-rootfs   /        ext4   discard,commit=30,errors=remount-ro     0 1                                │
-│            │          │ LABEL=BOOT      /boot   ext4    defaults        0 2                                                                │
-│            │          │ LABEL=UEFI      /boot/efi       vfat    umask=0077      0 1                                                        │
-│            │          │ 10.10.12.12:/opt/data/instances /opt/data/instances/ nfs vers=3,proto=tcp,lookupcache=pos,nolock,noacl,_netdev 0 0 │
-│            │          │ 10.10.12.12:/mnt/glance /var/opt/imagelibrary/data nfs vers=3,proto=tcp,lookupcache=pos,_netdev 0 0                │
-╰────────────┴──────────┴────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────┬──────────┬─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Check      │  Status  │ Output                                                                                                              │
+├────────────┼──────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ /etc/fstab │    OK    │ LABEL=cloudimg-rootfs   /        ext4   discard,commit=30,errors=remount-ro     0 1                                 │
+│            │          │ LABEL=BOOT      /boot   ext4    defaults        0 2                                                                 │
+│            │          │ LABEL=UEFI      /boot/efi       vfat    umask=0077      0 1                                                         │
+│            │          │ <IP_ADDRESS>:/opt/data/instances /opt/data/instances/ nfs vers=3,proto=tcp,lookupcache=pos,nolock,noacl,_netdev 0 0 │
+│            │          │ <IP_ADDRESS>:/mnt/glance /var/opt/imagelibrary/data nfs vers=3,proto=tcp,lookupcache=pos,_netdev 0 0                │
+╰────────────┴──────────┴─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 VIRSH LIVENESS                                                         
 ╭──────────────────────┬──────────┬───────────────────────────────────╮
@@ -810,7 +889,7 @@ VIRTUALIZATION AND KVM
 ├──────────────────────────┼──────────┼──────────────────────────┤
 │ CPU virtualization flags │    OK    │ vmx/svm present          │
 ├──────────────────────────┼──────────┼──────────────────────────┤
-│ /dev/kvm                 │    OK    │ character device present │
+│ <DEVICE_PATH>            │    OK    │ character device present │
 ├──────────────────────────┼──────────┼──────────────────────────┤
 │ libvirtd                 │    OK    │ active                   │
 ╰──────────────────────────┴──────────┴──────────────────────────╯
@@ -831,7 +910,7 @@ KERNEL COMMAND LINE
 ├──────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ Hugepage parameters      │    OK    │ default_hugepagesz=2M                                                                                                                                                                             │
 ├──────────────────────────┼──────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ Kernel command line      │   INFO   │ BOOT_IMAGE=/vmlinuz-6.8.0-147-generic root=UUID=9e367d2b-90cc-4fb8-a760-383572199c1a ro intel_iommu=on iommu=pt default_hugepagesz=2M hugepagesz=2M hugepages=2048                                │
+│ Kernel command line      │   INFO   │ BOOT_IMAGE=/vmlinuz-6.8.0-147-generic root=UUID=<UUID> ro intel_iommu=on iommu=pt default_hugepagesz=2M hugepagesz=2M hugepages=2048                                                              │
 │                          │          │ isolcpus=managed_irq,domain,2-3,6-7 nohz_full=2-3,6-7 rcu_nocbs=2-3,6-7 console=tty1 console=ttyS0                                                                                                │
 ╰──────────────────────────┴──────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
@@ -862,7 +941,7 @@ CURRENT HUGEPAGE ALLOCATION
 │                          │          │ Hugetlb:         4194304 kB                                             │
 ├──────────────────────────┼──────────┼─────────────────────────────────────────────────────────────────────────┤
 │ hugetlbfs mount          │    OK    │ TARGET         SOURCE    FSTYPE    OPTIONS                              │
-│                          │          │ /dev/hugepages hugetlbfs hugetlbfs rw,nosuid,nodev,relatime,pagesize=2M │
+│                          │          │ <DEVICE_PATH> hugetlbfs hugetlbfs rw,nosuid,nodev,relatime,pagesize=2M  │
 ├──────────────────────────┼──────────┼─────────────────────────────────────────────────────────────────────────┤
 │ NUMA hugepage allocation │   INFO   │ Node 0:                                                                 │
 │                          │          │ 4KiB: 211084                                                            │
@@ -907,20 +986,20 @@ IRQ PLACEMENT
 ╰───────────────────────────────┴──────────┴─────────────────────────────────────────────╯
 
 NIC PASSTHROUGH CONFIGURATION                                                                                                           
-╭─────────────────────┬──────────┬─────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Check               │  Status  │ Output                                                                                              │
-├─────────────────────┼──────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ IOMMU groups        │    OK    │ 13 group(s) found                                                                                   │
-├─────────────────────┼──────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ driverctl overrides │   INFO   │ 0000:01:00.0 vfio-pci                                                                               │
-├─────────────────────┼──────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ vfio-pci devices    │   INFO   │ 01:00.0 Ethernet controller [0200]: Intel Corporation 82574L Gigabit Network Connection [8086:10d3] │
-│                     │          │         Subsystem: Intel Corporation 82574L Gigabit Network Connection [8086:0000]                  │
-│                     │          │         Kernel driver in use: vfio-pci                                                              │
-│                     │          │         Kernel modules: e1000e                                                                      │
-├─────────────────────┼──────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ vfio_pci module     │    OK    │ loaded                                                                                              │
-╰─────────────────────┴──────────┴─────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─────────────────────┬──────────┬──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Check               │  Status  │ Output                                                                                                           │
+├─────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ IOMMU groups        │    OK    │ 13 group(s) found                                                                                                │
+├─────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ driverctl overrides │   INFO   │ <PCI_DEVICE_ADDRESS> vfio-pci                                                                                    │
+├─────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ vfio-pci devices    │   INFO   │ <PCI_DEVICE_ADDRESS> Ethernet controller [0200]: Intel Corporation 82574L Gigabit Network Connection [8086:10d3] │
+│                     │          │         Subsystem: Intel Corporation 82574L Gigabit Network Connection [8086:0000]                               │
+│                     │          │         Kernel driver in use: vfio-pci                                                                           │
+│                     │          │         Kernel modules: e1000e                                                                                   │
+├─────────────────────┼──────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ vfio_pci module     │    OK    │ loaded                                                                                                           │
+╰─────────────────────┴──────────┴──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 NOVA CPU AND PASSTHROUGH CONFIGURATION                                                                                                                           
 ╭──────────────────────────────────────────────────┬──────────┬─────────────────────────────────────────────────────────────────────────────────────────────────╮
@@ -932,43 +1011,43 @@ NOVA CPU AND PASSTHROUGH CONFIGURATION
 ├──────────────────────────────────────────────────┼──────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ reserved_host_memory_mb                          │   INFO   │ 4096                                                                                            │
 ├──────────────────────────────────────────────────┼──────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ PCI aliases, device specs, or reserved hugepages │   INFO   │ device_spec = {"address": "0000:01:00.0"}                                                       │
+│ PCI aliases, device specs, or reserved hugepages │   INFO   │ device_spec = {"address": "<PCI_DEVICE_ADDRESS>"}                                               │
 │                                                  │          │ alias = {"vendor_id":"8086", "product_id":"10d3", "device_type":"type-PCI", "name":"82574L-pt"} │
 ╰──────────────────────────────────────────────────┴──────────┴─────────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 - Actual FC relationship output when the local ports and FCP targets are online:
 ```
 FC PORTS
-╭─────────────┬────────┬──────────────────────────────────────────────────────────╮
-│ Check       │ Status │ Output                                                   │
-├─────────────┼────────┼──────────────────────────────────────────────────────────┤
-│ host2       │   OK   │ WWPN: 0x100000109b123456; WWNN: 0x200000109b123456;      │
-│             │        │ Port State: Online; Speed: 32 Gbit;                      │
-│             │        │ Fabric Name: 0x100050eb1a2b3c4d                          │
-├─────────────┼────────┼──────────────────────────────────────────────────────────┤
-│ host3       │   OK   │ WWPN: 0x100000109b123457; WWNN: 0x200000109b123457;      │
-│             │        │ Port State: Online; Speed: 32 Gbit;                      │
-│             │        │ Fabric Name: 0x100050eb1a2b3c4d                          │
-├─────────────┼────────┼──────────────────────────────────────────────────────────┤
-│ rport-2:0-1 │   OK   │ Local Host: host2; Local WWPN: 0x100000109b123456;       │
-│             │        │ Local State: Online; Target WWPN: 0x50060e8012345601;    │
-│             │        │ Remote Role: FCP Target                                  │
-├─────────────┼────────┼──────────────────────────────────────────────────────────┤
-│ rport-2:0-2 │   OK   │ Local Host: host2; Local WWPN: 0x100000109b123456;       │
-│             │        │ Local State: Online; Target WWPN: 0x50060e8012345602;    │
-│             │        │ Remote Role: FCP Target                                  │
-├─────────────┼────────┼──────────────────────────────────────────────────────────┤
-│ rport-3:0-1 │   OK   │ Local Host: host3; Local WWPN: 0x100000109b123457;       │
-│             │        │ Local State: Online; Target WWPN: 0x50060e8012345701;    │
-│             │        │ Remote Role: FCP Target                                  │
-├─────────────┼────────┼──────────────────────────────────────────────────────────┤
-│ rport-3:0-2 │   OK   │ Local Host: host3; Local WWPN: 0x100000109b123457;       │
-│             │        │ Local State: Online; Target WWPN: 0x50060e8012345702;    │
-│             │        │ Remote Role: FCP Target                                  │
-├─────────────┼────────┼──────────────────────────────────────────────────────────┤
-│ FCP targets │   OK   │ FCP target ports visible: 4 across 2 online local FC     │
-│             │        │ port(s); host2: 2 target(s); host3: 2 target(s)          │
-╰─────────────┴────────┴──────────────────────────────────────────────────────────╯
+╭───────────────┬────────┬──────────────────────────────────────────────────────────╮
+│ Check         │ Status │ Output                                                   │
+├───────────────┼────────┼──────────────────────────────────────────────────────────┤
+│ <FC_HOST>     │   OK   │ WWPN: <WWN>; WWNN: <WWN>;                                │
+│               │        │ Port State: Online; Speed: 32 Gbit;                      │
+│               │        │ Fabric Name: <WWN>                                       │
+├───────────────┼────────┼──────────────────────────────────────────────────────────┤
+│ <FC_HOST>     │   OK   │ WWPN: <WWN>; WWNN: <WWN>;                                │
+│               │        │ Port State: Online; Speed: 32 Gbit;                      │
+│               │        │ Fabric Name: <WWN>                                       │
+├───────────────┼────────┼──────────────────────────────────────────────────────────┤
+│ <REMOTE_PORT> │   OK   │ Local Host: <FC_HOST>; Local WWPN: <WWN>;                │
+│               │        │ Local State: Online; Target WWPN: <WWN>;                 │
+│               │        │ Remote Role: FCP Target                                  │
+├───────────────┼────────┼──────────────────────────────────────────────────────────┤
+│ <REMOTE_PORT> │   OK   │ Local Host: <FC_HOST>; Local WWPN: <WWN>;                │
+│               │        │ Local State: Online; Target WWPN: <WWN>;                 │
+│               │        │ Remote Role: FCP Target                                  │
+├───────────────┼────────┼──────────────────────────────────────────────────────────┤
+│ <REMOTE_PORT> │   OK   │ Local Host: <FC_HOST>; Local WWPN: <WWN>;                │
+│               │        │ Local State: Online; Target WWPN: <WWN>;                 │
+│               │        │ Remote Role: FCP Target                                  │
+├───────────────┼────────┼──────────────────────────────────────────────────────────┤
+│ <REMOTE_PORT> │   OK   │ Local Host: <FC_HOST>; Local WWPN: <WWN>;                │
+│               │        │ Local State: Online; Target WWPN: <WWN>;                 │
+│               │        │ Remote Role: FCP Target                                  │
+├───────────────┼────────┼──────────────────────────────────────────────────────────┤
+│ FCP targets   │   OK   │ FCP target ports visible: 4 across 2 online local FC     │
+│               │        │ port(s); <FC_HOST>: 2 target(s); <FC_HOST>: 2 target(s)  │
+╰───────────────┴────────┴──────────────────────────────────────────────────────────╯
 ```
 
 The `rport-*` rows above are the relationship records printed by the script. Each row identifies the local host and WWPN, local state, target WWPN, and remote role. Terminal, plain-text, PDF, and JSON reports preserve this same output.
@@ -979,21 +1058,21 @@ When the node has no local FC ports, the section instead reports:
 FC PORTS
 ╭──────────────────────────────────────────────────────────────────────────╮
 │ Check    │ Status │ Output                                               │
-├──────────┼────────┼──────────────────────────────────────────────────────┤
+├──────────────────────────────────────────────────────────────────────────┤
 │ FC ports │  WARN  │ no FC ports found on this node                       │
 │          │        │ (/sys/class/fc_host/host* absent)                    │
-╰──────────┴────────┴──────────────────────────────────────────────────────╯
+╰──────────────────────────────────────────────────────────────────────────╯
 ```
 
 - Sample output with `check-control-plane` , `--hosts` and `--region` options:
 ```
 ./hostinfo_check_v8 check-control-plane --hosts --region <region-name>
 hostInfo-check                            
-╭──────────────┬─────────────────────────╮
-│ Host Name    │ Report Time             │
-├──────────────┼─────────────────────────┤
-│ hl-u24-host1 │ 2026-11-13 08:20:43 UTC │
-╰──────────────┴─────────────────────────╯
+╭──────────────────┬─────────────────────────╮
+│ Host Name        │ Report Time             │
+├──────────────────┼─────────────────────────┤
+│ hl-u24-<FC_HOST> │ 2026-11-13 08:20:43 UTC │
+╰──────────────────┴─────────────────────────╯
 
 STORAGE BACKEND CONFIGURATION                             
 ╭─────────────────┬───────────────────┬──────────────────╮
@@ -1003,43 +1082,43 @@ STORAGE BACKEND CONFIGURATION
 ╰─────────────────┴───────────────────┴──────────────────╯
 
 HOSTCONFIG NETWORK LABELS                              
-╭─────────────────────┬──────────┬────────────────────╮
-│ Hostconfig Profile  │  Status  │ Output             │
-├─────────────────────┼──────────┼────────────────────┤
-│ pf9os-hl-profile-v1 │    OK    │ mgmt -> ens18      │
-│                     │          │ vmnet -> ens19     │
-├─────────────────────┼──────────┼────────────────────┤
-│ u24-hl-config1      │    OK    │ mgmt -> ens18      │
-│                     │          │ migtest -> vlan510 │
-│                     │          │ vmnet -> ens19     │
-├─────────────────────┼──────────┼────────────────────┤
-│ u24-passth-cfg1     │    OK    │ mgmt -> enp7s18    │
-│                     │          │ vmnet -> enp7s19   │
-╰─────────────────────┴──────────┴────────────────────╯
+╭─────────────────────┬──────────┬─────────────────────────────╮
+│ Hostconfig Profile  │  Status  │ Output                      │
+├─────────────────────┼──────────┼─────────────────────────────┤
+│ pf9os-hl-profile-v1 │    OK    │ mgmt -> <INTERFACE_NAME>    │
+│                     │          │ vmnet -> <INTERFACE_NAME>   │
+├─────────────────────┼──────────┼─────────────────────────────┤
+│ u24-hl-config1      │    OK    │ mgmt -> <INTERFACE_NAME>    │
+│                     │          │ migtest -> <VLAN_INTERFACE> │
+│                     │          │ vmnet -> <INTERFACE_NAME>   │
+├─────────────────────┼──────────┼─────────────────────────────┤
+│ u24-passth-cfg1     │    OK    │ mgmt -> <INTERFACE_NAME>    │
+│                     │          │ vmnet -> <INTERFACE_NAME>   │
+╰─────────────────────┴──────────┴─────────────────────────────╯
 
 PROVIDER NETWORKS
 ╭───────────────┬──────────┬─────────────────────────────────────────────╮
 │ Network Label │  Status  │ Output                                      │
 ├───────────────┼──────────┼─────────────────────────────────────────────┤
 │ vmnet         │    OK    │ Network: hl-provider-510                    │
-│               │          │ Tenant ID: 3243aebbb412467da80fdf6d44420eec │
+│               │          │ Tenant ID: <TENANT_ID>                      │
 ├───────────────┼──────────┼─────────────────────────────────────────────┤
 │ migtest       │    OK    │ Network: hl-provider-510-flt                │
-│               │          │ Tenant ID: 3243aebbb412467da80fdf6d44420eec │
+│               │          │ Tenant ID: <TENANT_ID>                      │
 ╰───────────────┴──────────┴─────────────────────────────────────────────╯
 
 HOSTS                                                      
-╭──────────────┬─────────────────────┬────────────────────╮
-│ Hostname     │ Hostconfig Profile  │ Cluster Name       │
-├──────────────┼─────────────────────┼────────────────────┤
-│ hl-pf9os-01  │ pf9os-hl-profile-v1 │ pf9-rocky-cl1      │
-├──────────────┼─────────────────────┼────────────────────┤
-│ hl-pf9os-02  │ pf9os-hl-profile-v1 │ pf9-rocky-cl1      │
-├──────────────┼─────────────────────┼────────────────────┤
-│ hl-u24-host1 │ u24-hl-config1      │ u24-test-cl1       │
-├──────────────┼─────────────────────┼────────────────────┤
-│ hl-u24-host2 │ u24-hl-config1      │ u24-test-cl1       │
-├──────────────┼─────────────────────┼────────────────────┤
-│ hl-u24-host3 │ u24-passth-cfg1     │ u24-passth-cluster │
-╰──────────────┴─────────────────────┴────────────────────╯
+╭──────────────────┬─────────────────────┬────────────────────╮
+│ Hostname         │ Hostconfig Profile  │ Cluster Name       │
+├──────────────────┼─────────────────────┼────────────────────┤
+│ <HOSTNAME>       │ pf9os-hl-profile-v1 │ pf9-rocky-cl1      │
+├──────────────────┼─────────────────────┼────────────────────┤
+│ <HOSTNAME>       │ pf9os-hl-profile-v1 │ pf9-rocky-cl1      │
+├──────────────────┼─────────────────────┼────────────────────┤
+│ hl-u24-<FC_HOST> │ u24-hl-config1      │ u24-test-cl1       │
+├──────────────────┼─────────────────────┼────────────────────┤
+│ hl-u24-<FC_HOST> │ u24-hl-config1      │ u24-test-cl1       │
+├──────────────────┼─────────────────────┼────────────────────┤
+│ hl-u24-<FC_HOST> │ u24-passth-cfg1     │ u24-passth-cluster │
+╰──────────────────┴─────────────────────┴────────────────────╯
 ```
