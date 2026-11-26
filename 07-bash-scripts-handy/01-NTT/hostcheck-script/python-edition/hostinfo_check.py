@@ -1851,15 +1851,24 @@ def check_sysctl_settings() -> list[CheckResult]:
     }
     directory = Path("/etc/sysctl.d")
     files = list(directory.glob("*.conf")) if directory.is_dir() else []
+    kernel_version_advisory = (
+        "ignore if the system is running with updated kernel version"
+    )
+    kernel_dependent_keys = {"net.mptcp.enabled", "net.ipv4.tcp_migrate_req"}
     rows: list[CheckResult] = []
     for key, wanted in expected.items():
         runtime = run_command(["sysctl", "-n", key])
+        runtime_matches = runtime.stdout == wanted
+        runtime_status = "OK" if runtime_matches else (
+            "WARN" if key in kernel_dependent_keys or runtime.stdout else "FAIL"
+        )
         rows.append(
             comparison_result(
                 f"Runtime {key}",
-                "OK" if runtime.stdout == wanted else ("WARN" if runtime.stdout else "FAIL"),
+                runtime_status,
                 runtime.stdout,
                 wanted,
+                kernel_version_advisory if key in kernel_dependent_keys else "",
             )
         )
         matching_files = []
@@ -1870,8 +1879,21 @@ def check_sysctl_settings() -> list[CheckResult]:
         rows.append(
             result(
                 f"Persistent {key}",
-                "OK" if matching_files else "FAIL",
-                "\n".join(matching_files) or f"not found under {directory}",
+                "OK"
+                if matching_files
+                else ("WARN" if key in kernel_dependent_keys else "FAIL"),
+                "\n".join(
+                    filter(
+                        None,
+                        [
+                            "\n".join(matching_files)
+                            or f"not found under {directory}",
+                            kernel_version_advisory
+                            if key in kernel_dependent_keys
+                            else "",
+                        ],
+                    )
+                ),
             )
         )
     return rows
@@ -3353,6 +3375,7 @@ def write_pdf_report(
         textColor=palette["NAVY"],
         fontSize=18,
         leading=22,
+        alignment=TA_CENTER,
         spaceAfter=0,
     )
     body_style = ParagraphStyle(
@@ -3446,8 +3469,8 @@ def write_pdf_report(
         try:
             logo_image = PdfImage(str(logo_path), lazy=0)
             logo_scale = min(
-                (35 * mm) / logo_image.imageWidth,
-                (15 * mm) / logo_image.imageHeight,
+                (30 * mm) / logo_image.imageWidth,
+                (12 * mm) / logo_image.imageHeight,
                 1.0,
             )
             logo_image.drawWidth = logo_image.imageWidth * logo_scale
@@ -3458,12 +3481,17 @@ def write_pdf_report(
             # An unreadable logo must not prevent the report from being created.
             pass
     header_table = PdfTable(
-        [[Paragraph("Host Information Check Report", title_style), logo]],
-        colWidths=[available_width * 0.80, available_width * 0.20],
+        [["", Paragraph("Host Information Check Report", title_style), logo]],
+        colWidths=[
+            available_width * 0.15,
+            available_width * 0.70,
+            available_width * 0.15,
+        ],
         style=TableStyle(
             [
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+                ("ALIGN", (1, 0), (1, 0), "CENTER"),
+                ("ALIGN", (2, 0), (2, 0), "RIGHT"),
                 ("LINEBELOW", (0, 0), (-1, -1), 1, palette["ACCENT"]),
                 ("LEFTPADDING", (0, 0), (-1, -1), 0),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 0),
@@ -3906,8 +3934,6 @@ def main() -> int:
         parser.error("--hosts cannot be combined with --run-all")
     if arguments.hosts and arguments.storage_check and not arguments.run_all:
         parser.error("--hosts cannot be combined with --storage-check")
-    if arguments.org is not None and arguments.run_all:
-        parser.error("--org cannot be combined with --run-all")
     if arguments.org is not None and not (
         arguments.pdf or arguments.json or arguments.log
     ):

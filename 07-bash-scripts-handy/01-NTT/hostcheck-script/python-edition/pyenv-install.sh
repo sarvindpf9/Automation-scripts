@@ -36,6 +36,9 @@ cp -r ./hostinfo_check.py ${SCRIPTS_DIR}/hostinfo_check
 if [ "$(readlink -f ./requirements.txt)" != "$(readlink -f "${SCRIPTS_DIR}/requirements.txt")" ]; then
   cp -r ./requirements.txt "${SCRIPTS_DIR}/requirements.txt"
 fi
+if [ "$(readlink -f ./logo.png)" != "$(readlink -f "${SCRIPTS_DIR}/logo.png")" ]; then
+  cp -r ./logo.png "${SCRIPTS_DIR}/logo.png"
+fi
 echo " "
 
 echo "Setting up python environment"
